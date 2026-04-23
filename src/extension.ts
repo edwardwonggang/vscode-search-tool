@@ -275,7 +275,6 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
   private lastStateMessage: SearchStateMessage = { type: 'state', running: false, summary: '' };
   private translationsCache?: Record<string, string>;
   private searchResultViewColumn?: vscode.ViewColumn;
-  private lastSearchResultUri?: vscode.Uri;
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.outputChannel = vscode.window.createOutputChannel('Ripgrep Tool');
@@ -415,6 +414,7 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     const refreshMs = Math.max(4, config.get<number>('resultRefreshMs', 80));
     const threads = Math.max(0, config.get<number>('threads', 0));
     const args = this.buildArgs(options, settings, maxCountPerFile, contextLines, threads);
+    const resultPathFilter = createResultPathFilter(options, settings);
     const remoteCwd = this.mapWorkspacePath(workspaceFolder.uri.fsPath);
 
     if (options.definitionMode === true) {
@@ -454,6 +454,9 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
       const filePath = data.path.text as string;
       const absolutePath = path.join(workspaceFolder.uri.fsPath, filePath.replace(/\//g, path.sep));
       const relativePath = vscode.workspace.asRelativePath(absolutePath, false);
+      if (!resultPathFilter(relativePath)) {
+        return;
+      }
       const submatches = data.submatches as Array<{ start: number; end: number }>;
       const lines = data.lines.text as string;
       const lineNumber = data.line_number as number;
@@ -618,11 +621,6 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     for (const glob of settings.excludeGlobs) {
       args.push('--glob', `!${glob}`);
     }
-    if (options.include.trim()) {
-      for (const glob of splitUserGlobs(options.include)) {
-        args.push('--glob', glob);
-      }
-    }
     if (options.exclude.trim()) {
       for (const glob of splitUserGlobs(options.exclude)) {
         args.push('--glob', `!${glob}`);
@@ -676,17 +674,10 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async openMatch(match: SearchMatch): Promise<void> {
-    // preview:false 会创建固定标签，后续 showTextDocument 不会替换，导致每个文件一个新 TAB。
-    // 使用 preview:true + 切换文件时关闭上一次的“搜索结果”标签，保证始终只占用一个页签位置。
+    // Keep a single preview tab in one editor group and let VS Code replace it in place.
     this.outputChannel.appendLine(`[Ripgrep] openMatch: rawPath="${match.path}", normalized="${path.normalize(match.path)}", line=${match.line}, preview="${match.preview}"`);
     const nextUri = vscode.Uri.file(match.path);
     this.invalidateSearchResultViewColumnIfEmpty();
-
-    if (this.lastSearchResultUri && !this.uriPathsEqual(this.lastSearchResultUri, nextUri) && this.searchResultViewColumn !== undefined) {
-      this.outputChannel.appendLine(`[Ripgrep] closing previous search result tab: ${this.lastSearchResultUri.fsPath}`);
-      await this.tryCloseSearchResultTab(this.lastSearchResultUri, this.searchResultViewColumn);
-      this.invalidateSearchResultViewColumnIfEmpty();
-    }
 
     try {
       this.outputChannel.appendLine(`[Ripgrep] Attempting to open document: ${nextUri.fsPath}`);
@@ -702,7 +693,6 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
       }
       const editor = await vscode.window.showTextDocument(document, showOptions);
       this.searchResultViewColumn = editor.viewColumn;
-      this.lastSearchResultUri = editor.document.uri;
       this.updateEditorSelection(editor, match);
       this.outputChannel.appendLine(`[Ripgrep] successfully opened match at line ${match.line}, editor viewColumn: ${editor.viewColumn}`);
     } catch (error) {
@@ -714,10 +704,6 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private uriPathsEqual(a: vscode.Uri, b: vscode.Uri): boolean {
-    return path.normalize(a.fsPath) === path.normalize(b.fsPath);
-  }
-
   private invalidateSearchResultViewColumnIfEmpty(): void {
     if (this.searchResultViewColumn === undefined) {
       return;
@@ -727,23 +713,6 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     );
     if (!columnOpen) {
       this.searchResultViewColumn = undefined;
-    }
-  }
-
-  private async tryCloseSearchResultTab(
-    fileUri: vscode.Uri,
-    targetColumn: vscode.ViewColumn
-  ): Promise<void> {
-    for (const group of vscode.window.tabGroups.all) {
-      if (group.viewColumn !== targetColumn) {
-        continue;
-      }
-      for (const tab of group.tabs) {
-        if (tab.input instanceof vscode.TabInputText && this.uriPathsEqual(tab.input.uri, fileUri)) {
-          await vscode.window.tabGroups.close(tab, true);
-          return;
-        }
-      }
     }
   }
 
@@ -1244,6 +1213,7 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
   ): Promise<void> {
     const query = options.query.trim();
     const startedAt = Date.now();
+    const definitionPathFilter = createResultPathFilter(options, settings);
     this.postState({
       type: 'state',
       running: true,
@@ -1308,11 +1278,15 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
         if (!m) {
           continue;
         }
+        const relativePath = vscode.workspace.asRelativePath(m.path, false);
+        if (!definitionPathFilter(relativePath)) {
+          continue;
+        }
         let bucket = this.resultCache.get(m.path);
         if (!bucket) {
           bucket = {
             path: m.path,
-            relativePath: vscode.workspace.asRelativePath(m.path, false),
+            relativePath,
             matches: [] as SearchMatch[]
           };
           this.resultCache.set(m.path, bucket);
@@ -1475,6 +1449,108 @@ function splitUserGlobs(value: string): string[] {
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function createResultPathFilter(
+  options: SearchOptions,
+  settings: SearchSettings
+): (relativePath: string) => boolean {
+  const settingsIncludeGlobs = settings.includeGlobs;
+  const userIncludeGlobs = splitUserGlobs(options.include);
+  const excludeGlobs = [...settings.excludeGlobs, ...splitUserGlobs(options.exclude)];
+
+  return (relativePath: string): boolean => {
+    const normalizedPath = normalizeSearchPath(relativePath);
+    const matchesSettingsInclude =
+      settingsIncludeGlobs.length === 0 || settingsIncludeGlobs.some((glob) => matchSearchGlob(normalizedPath, glob));
+    if (!matchesSettingsInclude) {
+      return false;
+    }
+    const matchesUserInclude =
+      userIncludeGlobs.length === 0 || userIncludeGlobs.some((glob) => matchSearchGlob(normalizedPath, glob));
+    if (!matchesUserInclude) {
+      return false;
+    }
+    return !excludeGlobs.some((glob) => matchSearchGlob(normalizedPath, glob));
+  };
+}
+
+function matchSearchGlob(relativePath: string, glob: string): boolean {
+  const normalizedPath = normalizeSearchPath(relativePath);
+  const normalizedGlob = normalizeSearchPath(glob);
+  if (!normalizedPath || !normalizedGlob) {
+    return false;
+  }
+
+  if (!normalizedGlob.includes('/')) {
+    const segmentRegex = globSegmentToRegex(normalizedGlob);
+    return normalizedPath.split('/').some((segment) => segmentRegex.test(segment));
+  }
+
+  if (!/[?*\[]/.test(normalizedGlob)) {
+    return normalizedPath === normalizedGlob || normalizedPath.startsWith(`${normalizedGlob}/`);
+  }
+
+  return globPathToRegex(normalizedGlob).test(normalizedPath);
+}
+
+function normalizeSearchPath(value: string): string {
+  return String(value)
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\.\//, '')
+    .replace(/^\/+/, '')
+    .replace(/\/+/g, '/')
+    .replace(/\/$/, '');
+}
+
+function globSegmentToRegex(glob: string): RegExp {
+  return new RegExp(`^${globToRegexSource(glob, false)}$`, 'i');
+}
+
+function globPathToRegex(glob: string): RegExp {
+  return new RegExp(`^${globToRegexSource(glob, true)}$`, 'i');
+}
+
+function globToRegexSource(glob: string, allowPathSeparator: boolean): string {
+  let result = '';
+  for (let index = 0; index < glob.length; index += 1) {
+    const char = glob[index];
+    const next = glob[index + 1];
+
+    if (char === '*') {
+      if (allowPathSeparator && next === '*') {
+        const afterNext = glob[index + 2];
+        if (afterNext === '/') {
+          result += '(?:.*/)?';
+          index += 2;
+          continue;
+        }
+        result += '.*';
+        index += 1;
+        continue;
+      }
+      result += allowPathSeparator ? '[^/]*' : '.*';
+      continue;
+    }
+
+    if (char === '?') {
+      result += allowPathSeparator ? '[^/]' : '.';
+      continue;
+    }
+
+    if (char === '[') {
+      const closing = glob.indexOf(']', index + 1);
+      if (closing > index + 1) {
+        result += glob.slice(index, closing + 1);
+        index = closing;
+        continue;
+      }
+    }
+
+    result += escapeRegExpString(char);
+  }
+  return result;
 }
 
 function normalizeLocalPath(value: string): string {
