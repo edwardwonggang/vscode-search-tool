@@ -11,6 +11,7 @@ type SearchOptions = {
   caseSensitive: boolean;
   wholeWord: boolean;
   useRegex: boolean;
+  definitionMode?: boolean;
 };
 
 type SearchSettings = {
@@ -42,6 +43,7 @@ type SearchStateMessage = {
   error?: string;
   summary?: string;
   elapsedMs?: number;
+  ctagsInProgress?: boolean;
 };
 
 type SearchResultMessage = {
@@ -76,6 +78,9 @@ const BUNDLED_REMOTE_RG_RELATIVE_PATH = path.join(
   'ripgrep-14.1.0-x86_64-unknown-linux-musl',
   'rg'
 );
+const DEFAULT_REMOTE_CTAGS_PATH = '/tmp/ripgreptool-ctags';
+const BUNDLED_CTAGS_RELATIVE_PATH = path.join('assets', 'bin', 'ctags');
+const CTAGS_EXCLUDE_DIRS = ['build', 'out', 'rom'] as const;
 const SEARCH_VIEW_HTML_RELATIVE_PATH = path.join('media', 'search-view.html');
 const SEARCH_VIEW_CSS_RELATIVE_PATH = path.join('media', 'search-view.css');
 const SEARCH_VIEW_JS_RELATIVE_PATH = path.join('media', 'search-view.js');
@@ -89,7 +94,8 @@ const CODICON_ICON_RELATIVE_PATHS = {
   chevronDown: path.join('media', 'icons', 'codicons', 'chevron-down.svg'),
   eye: path.join('media', 'icons', 'codicons', 'eye.svg'),
   eyeClosed: path.join('media', 'icons', 'codicons', 'eye-closed.svg'),
-  close: path.join('media', 'icons', 'codicons', 'close.svg')
+  close: path.join('media', 'icons', 'codicons', 'close.svg'),
+  definition: path.join('media', 'icons', 'codicons', 'symbol-definition.svg')
 };
 const FILE_TYPE_ICON_RELATIVE_PATHS: Record<string, string> = {
   c: path.join('media', 'icons', 'filetypes', 'c.svg'),
@@ -292,6 +298,9 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
         case 'search':
           await this.runSearch(message.payload as SearchOptions);
           break;
+        case 'rebuildTags':
+          await this.rebuildTags();
+          break;
         case 'open':
           await this.openMatch(message.payload as SearchMatch);
           break;
@@ -407,6 +416,11 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     const threads = Math.max(0, config.get<number>('threads', 0));
     const args = this.buildArgs(options, settings, maxCountPerFile, contextLines, threads);
     const remoteCwd = this.mapWorkspacePath(workspaceFolder.uri.fsPath);
+
+    if (options.definitionMode === true) {
+      await this.runDefinitionSearch(token, options, workspaceFolder, remoteCwd, settings);
+      return;
+    }
 
     const startedAt = Date.now();
     let firstResultAt: number | undefined;
@@ -940,6 +954,428 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
   private log(message: string): void {
     this.outputChannel.appendLine(`[${new Date().toISOString()}] ${message}`);
   }
+
+  private async translate(key: string): Promise<string> {
+    const map = await this.getTranslations();
+    return map[key] || key;
+  }
+
+  private mapRemoteToLocalRemote(remotePosix: string): string {
+    const norm = remotePosix.replace(/\\/g, '/').replace(/\/+$/u, '');
+    const base = DEFAULT_REMOTE_ROOT.replace(/\/+$/u, '');
+    if (!norm.toLowerCase().startsWith(base.toLowerCase())) {
+      throw new Error(`Remote path is outside the mapped server root.`);
+    }
+    const rel = norm.slice(base.length).replace(/^\/+/u, '');
+    return path.join(DEFAULT_LOCAL_ROOT, rel.replace(/\//gu, path.sep));
+  }
+
+  private async getRemoteGitTop(client: Client, remoteCwd: string, token: number): Promise<string> {
+    const cmd = `cd ${shellEscape(remoteCwd)} && git rev-parse --show-toplevel`;
+    const r = await this.execRemoteCommandWithExitCode(client, cmd);
+    if (token !== this.searchToken) {
+      return '';
+    }
+    if (r.code != null && r.code !== 0) {
+      throw new Error(await this.translate('err_not_git_workspace'));
+    }
+    const top = r.stdout.split(/\r?\n/u)[0]?.trim() ?? '';
+    if (!top) {
+      throw new Error(await this.translate('err_not_git_workspace'));
+    }
+    const tree = await this.execRemoteCommandWithExitCode(
+      client,
+      `cd ${shellEscape(remoteCwd)} && git rev-parse --is-inside-work-tree`
+    );
+    if (token !== this.searchToken) {
+      return '';
+    }
+    if (tree.stdout.trim() !== 'true') {
+      throw new Error(await this.translate('err_not_git_workspace'));
+    }
+    return top;
+  }
+
+  private async remoteFileExists(client: Client, remotePath: string): Promise<boolean> {
+    const r = await this.execRemoteCommandWithExitCode(
+      client,
+      `if test -f ${shellEscape(remotePath)}; then echo y; else echo n; fi`
+    );
+    return r.stdout.trim() === 'y' && (r.code == null || r.code === 0);
+  }
+
+  private async execRemoteCommandWithExitCode(
+    client: Client,
+    command: string
+  ): Promise<{ stdout: string; stderr: string; code: number | undefined }> {
+    return await new Promise((resolve, reject) => {
+      client.exec(command, (error, stream) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        let stdout = '';
+        let stderr = '';
+        stream.on('data', (chunk: Buffer | string) => {
+          stdout += Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk;
+        });
+        stream.stderr.on('data', (chunk: Buffer | string) => {
+          stderr += Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk;
+        });
+        stream.on('close', (code: number | undefined | null) => {
+          resolve({ stdout, stderr, code: code == null ? undefined : code });
+        });
+        stream.on('error', (streamError: Error) => {
+          reject(streamError);
+        });
+      });
+    });
+  }
+
+  private async ensureRemoteCtags(client: Client): Promise<string> {
+    const localCtags = this.context.asAbsolutePath(BUNDLED_CTAGS_RELATIVE_PATH);
+    try {
+      await fs.access(localCtags);
+      await this.uploadBundledCtags(client, DEFAULT_REMOTE_CTAGS_PATH, localCtags);
+      return DEFAULT_REMOTE_CTAGS_PATH;
+    } catch {
+      this.log('bundled ctags not found; using ctags on remote PATH');
+    }
+    const r = await this.execRemoteCommandWithExitCode(
+      client,
+      'command -v ctags 2>/dev/null || command -v universal-ctags 2>/dev/null || true'
+    );
+    const ctags = r.stdout.split(/\r?\n/u)[0]?.trim() ?? '';
+    if (!ctags) {
+      throw new Error(await this.translate('err_ctags_missing'));
+    }
+    return ctags;
+  }
+
+  private async uploadBundledCtags(
+    client: Client,
+    remoteCtagsPath: string,
+    localCtagsPath: string
+  ): Promise<void> {
+    this.log(`checking remote ctags at ${remoteCtagsPath}`);
+    const have = await this.getRemoteCtagsVersion(client, remoteCtagsPath);
+    if (have) {
+      this.log('remote ctags already present');
+      return;
+    }
+    await this.execRemoteCommand(client, `mkdir -p ${shellEscape(posixPath.dirname(remoteCtagsPath))}`);
+    const sftp = await this.openSftp(client);
+    await new Promise<void>((resolve, reject) => {
+      sftp.fastPut(localCtagsPath, remoteCtagsPath, {}, (error) => {
+        if (error) {
+          reject(error);
+        } else {
+          resolve();
+        }
+      });
+    });
+    sftp.end();
+    await this.execRemoteCommand(client, `chmod +x ${shellEscape(remoteCtagsPath)}`);
+  }
+
+  private async getRemoteCtagsVersion(client: Client, remoteCtagsPath: string): Promise<string | undefined> {
+    try {
+      const r = await this.execRemoteCommandWithExitCode(
+        client,
+        `${shellEscape(remoteCtagsPath)} --version 2>/dev/null | head -n 1 || true`
+      );
+      return r.stdout.trim() || undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async runRemoteCtagsBuild(
+    client: Client,
+    ctagsPath: string,
+    gitTop: string,
+    tagsPath: string,
+    token: number
+  ): Promise<void> {
+    const buildSummary = await this.translate('ctags_building');
+    this.postState({ type: 'state', running: true, summary: buildSummary, ctagsInProgress: true });
+    const excludes = CTAGS_EXCLUDE_DIRS.map((d) => `--exclude=${d}`).join(' ');
+    const command = `cd ${shellEscape(gitTop)} && ${shellEscape(ctagsPath)} -R -f ${shellEscape(tagsPath)} --tag-relative=yes --fields=+n ${excludes} .`;
+    const { code, logText } = await this.execCtagsWithProgress(client, command, token, buildSummary);
+    if (token !== this.searchToken) {
+      return;
+    }
+    if (code !== 0 && code !== undefined) {
+      throw new Error(
+        (logText && logText.trim().slice(0, 500)) || (await this.translate('ctags_build_failed'))
+      );
+    }
+    this.postState({ type: 'state', running: true, ctagsInProgress: false, summary: await this.translate('ctags_build_done') });
+  }
+
+  private async execCtagsWithProgress(
+    client: Client,
+    command: string,
+    token: number,
+    buildSummary: string
+  ): Promise<{ code: number | undefined; logText: string }> {
+    return await new Promise((resolve, reject) => {
+      client.exec(command, (error, stream) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        this.activeRemoteChannel = stream;
+        let acc = '';
+        const pushChunk = (text: string) => {
+          acc += text;
+          if (token !== this.searchToken) {
+            return;
+          }
+          const parts = acc.split(/\r?\n/u);
+          const last = parts[Math.max(0, parts.length - 2)] || parts[0] || '';
+          const tail = last.length > 90 ? last.slice(-90) : last;
+          this.postState({
+            type: 'state',
+            running: true,
+            ctagsInProgress: true,
+            summary: tail.trim() ? `${buildSummary} — ${tail.trim()}` : buildSummary
+          });
+        };
+        stream.on('data', (c: Buffer | string) => {
+          pushChunk(Buffer.isBuffer(c) ? c.toString('utf8') : c);
+        });
+        stream.stderr.on('data', (c: Buffer | string) => {
+          pushChunk(Buffer.isBuffer(c) ? c.toString('utf8') : c);
+        });
+        stream.on('close', (c: number | undefined) => {
+          if (token === this.searchToken) {
+            this.activeRemoteChannel = undefined;
+          }
+          resolve({ code: c, logText: acc });
+        });
+        stream.on('error', (e: Error) => {
+          reject(e);
+        });
+      });
+    });
+  }
+
+  private parseTagResultLine(
+    line: string,
+    query: string,
+    workspaceRoot: string,
+    gitTopRemote: string
+  ): SearchMatch | null {
+    const firstTab = line.indexOf('\t');
+    if (firstTab <= 0) {
+      return null;
+    }
+    const name = line.slice(0, firstTab);
+    if (name !== query) {
+      return null;
+    }
+    const rest = line.slice(firstTab + 1);
+    const secondTab = rest.indexOf('\t');
+    if (secondTab <= 0) {
+      return null;
+    }
+    const fileRel = rest.slice(0, secondTab);
+    const after = rest.slice(secondTab + 1);
+    const lineNumMatch = /line:(\d+)/u.exec(after);
+    const lineNo = lineNumMatch ? Number.parseInt(lineNumMatch[1] ?? '1', 10) : 1;
+    const semi = after.indexOf(';"');
+    const excmd = semi >= 0 ? after.slice(0, semi) : after;
+    const preview = excmd.length > 200 ? excmd.slice(0, 200) + '...' : excmd;
+    const remoteFileAbs = fileRel.startsWith('/')
+      ? fileRel
+      : posixPath.join(gitTopRemote.replace(/\/+$/u, ''), fileRel);
+    let localPath: string;
+    try {
+      localPath = this.mapRemoteToLocalRemote(remoteFileAbs);
+    } catch {
+      localPath = path.join(workspaceRoot, fileRel.split('/').join(path.sep));
+    }
+    return {
+      path: localPath,
+      line: lineNo,
+      column: 1,
+      endColumn: 2,
+      preview: preview || name
+    };
+  }
+
+  private async runDefinitionSearch(
+    token: number,
+    options: SearchOptions,
+    workspaceFolder: vscode.WorkspaceFolder,
+    remoteCwd: string,
+    settings: SearchSettings
+  ): Promise<void> {
+    const query = options.query.trim();
+    const startedAt = Date.now();
+    this.postState({
+      type: 'state',
+      running: true,
+      summary: await this.translate('def_searching'),
+      ctagsInProgress: false
+    });
+
+    let client: Client | undefined;
+    try {
+      client = await this.connectRemote(settings);
+      this.activeRemoteClient = client;
+      this.log(`def-search#${token} ssh connected`);
+      await this.uploadBundledRg(client, DEFAULT_REMOTE_RG_PATH);
+      const ctagsPath = await this.ensureRemoteCtags(client);
+      this.log(`def-search#${token} ctags at ${ctagsPath}`);
+
+      const gitTop = await this.getRemoteGitTop(client, remoteCwd, token);
+      if (token !== this.searchToken) {
+        return;
+      }
+      if (!gitTop) {
+        return;
+      }
+      const tagsPath = posixPath.join(posixPath.dirname(gitTop), 'tags');
+      this.log(`def-search#${token} tagsPath=${tagsPath}`);
+
+      const exists = await this.remoteFileExists(client, tagsPath);
+      if (!exists) {
+        await this.runRemoteCtagsBuild(client, ctagsPath, gitTop, tagsPath, token);
+        if (token !== this.searchToken) {
+          return;
+        }
+      } else {
+        this.postState({ type: 'state', running: true, ctagsInProgress: false, summary: await this.translate('def_searching') });
+      }
+
+      const pattern = `^${escapeRegExpString(query)}\t`;
+      const tagsDir = posixPath.dirname(tagsPath);
+      const tagsBase = posixPath.basename(tagsPath);
+      const rgLine = `cd ${shellEscape(tagsDir)} && ${shellEscape(DEFAULT_REMOTE_RG_PATH)} -N --pcre2 ${shellEscape(pattern)} ${shellEscape(tagsBase)}`;
+      this.log(`def-search#${token} rg cmd`);
+      const rg = await this.execRemoteCommandWithExitCode(client, rgLine);
+      if (token !== this.searchToken) {
+        return;
+      }
+      if (rg.code !== 0 && rg.code !== 1) {
+        throw new Error(
+          (rg.stderr && rg.stderr.trim().slice(0, 300)) || `ripgrep exited with code ${String(rg.code)}`
+        );
+      }
+
+      const lines = rg.stdout
+        .split(/\r?\n/u)
+        .map((l) => l.trim())
+        .filter(Boolean);
+      this.resultCache.clear();
+      for (const line of lines) {
+        if (token !== this.searchToken) {
+          return;
+        }
+        const m = this.parseTagResultLine(line, query, workspaceFolder.uri.fsPath, gitTop);
+        if (!m) {
+          continue;
+        }
+        let bucket = this.resultCache.get(m.path);
+        if (!bucket) {
+          bucket = {
+            path: m.path,
+            relativePath: vscode.workspace.asRelativePath(m.path, false),
+            matches: [] as SearchMatch[]
+          };
+          this.resultCache.set(m.path, bucket);
+        }
+        bucket.matches.push(m);
+      }
+
+      this.pushResults();
+      const elapsedMs = Date.now() - startedAt;
+      const fileCount = this.resultCache.size;
+      const total = Array.from(this.resultCache.values()).reduce((a, f) => a + f.matches.length, 0);
+      const summary =
+        total === 0
+          ? (await this.translate('def_no_results')) + ` (${elapsedMs} ms)`
+          : `${fileCount} files, ${total} results (${elapsedMs} ms)`;
+      this.postState({ type: 'state', running: false, summary, elapsedMs, ctagsInProgress: false });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.log(`def-search#${token} error: ${message}`);
+      this.postState({ type: 'state', running: false, error: message, ctagsInProgress: false });
+    } finally {
+      if (client) {
+        try {
+          client.end();
+        } catch {
+          // ignore
+        }
+      }
+      this.activeRemoteClient = undefined;
+    }
+  }
+
+  private async rebuildTags(): Promise<void> {
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    if (!workspaceFolder) {
+      this.postState({ type: 'state', running: false, error: 'Open a workspace folder first.' });
+      return;
+    }
+    const settings = this.getSettings();
+    if (!this.shouldUseRemoteSearch(settings)) {
+      this.postState({
+        type: 'state',
+        running: false,
+        error: 'Remote search is required. Configure SSH host, username, and password in Settings.'
+      });
+      return;
+    }
+    this.cancelActiveSearch();
+    const token = ++this.searchToken;
+    const remoteCwd = this.mapWorkspacePath(workspaceFolder.uri.fsPath);
+    this.postState({ type: 'state', running: true, summary: await this.translate('rebuild_tags_start'), ctagsInProgress: false });
+    let client: Client | undefined;
+    try {
+      client = await this.connectRemote(settings);
+      this.activeRemoteClient = client;
+      await this.uploadBundledRg(client, DEFAULT_REMOTE_RG_PATH);
+      const ctagsPath = await this.ensureRemoteCtags(client);
+      const gitTop = await this.getRemoteGitTop(client, remoteCwd, token);
+      if (token !== this.searchToken) {
+        return;
+      }
+      if (!gitTop) {
+        return;
+      }
+      const tagsPath = posixPath.join(posixPath.dirname(gitTop), 'tags');
+      await this.runRemoteCtagsBuild(client, ctagsPath, gitTop, tagsPath, token);
+      if (token !== this.searchToken) {
+        return;
+      }
+      this.postState({
+        type: 'state',
+        running: false,
+        summary: await this.translate('rebuild_tags_done'),
+        ctagsInProgress: false
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.postState({ type: 'state', running: false, error: message, ctagsInProgress: false });
+    } finally {
+      if (client) {
+        try {
+          client.end();
+        } catch {
+          // ignore
+        }
+      }
+      this.activeRemoteClient = undefined;
+    }
+  }
+}
+
+function escapeRegExpString(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 }
 
 class JsonLineBuffer {
