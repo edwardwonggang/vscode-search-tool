@@ -1,0 +1,16 @@
+src/**
+.cursor/**
+tsconfig.json
+.gitignore
+.eslintrc.json
+.specstory/**
+.tmp-icons/**
+assets/bin/ripgrep-linux.tar.gz
+assets/bin/ripgrep-14.1.0-x86_64-unknown-linux-musl/complete/**
+assets/bin/ripgrep-14.1.0-x86_64-unknown-linux-musl/doc/**
+assets/bin/ripgrep-14.1.0-x86_64-unknown-linux-musl/COPYING
+assets/bin/ripgrep-14.1.0-x86_64-unknown-linux-musl/LICENSE-MIT
+assets/bin/ripgrep-14.1.0-x86_64-unknown-linux-musl/README.md
+assets/bin/ripgrep-14.1.0-x86_64-unknown-linux-musl/UNLICENSE
+node_modules/**
+!node_modules

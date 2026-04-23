@@ -1,0 +1,31 @@
+key,en,zh-CN
+settings_title,Settings,设置
+include_label,Files To Include,包含的文件
+exclude_label,Files To Exclude,排除的文件
+include_examples_title,Include Examples,包含示例
+exclude_examples_title,Exclude Examples,排除示例
+empty_results,No results,无结果
+settings_header,Search Settings,搜索设置
+close_title,Close,关闭
+remote_section_title,Remote,远端
+remote_section_hint,Use SSH to run ripgrep on the Linux server.,通过 SSH 在 Linux 服务器上运行 ripgrep。
+host_label,Host,主机
+port_label,Port,端口
+username_label,Username,用户名
+password_label,Password,密码
+filters_section_title,Filters,过滤
+include_globs_label,"Included file globs, one per line","包含文件 glob，每行一个"
+exclude_globs_label,"Excluded globs, one per line","排除 glob，每行一个"
+test_button,Test,测试
+reset_button,Reset,重置
+save_button,Save,保存
+query_placeholder,Search,搜索
+include_placeholder,"For example: *.ts, src/**, include/**","例如: *.ts, src/**, include/**"
+exclude_placeholder,"For example: node_modules, build/**, *.min.js","例如: node_modules, build/**, *.min.js"
+include_hint_placeholder,"For example: *.ts, *.cpp, src/**, include/**","例如: *.ts, *.cpp, src/**, include/**"
+exclude_hint_placeholder,"For example: node_modules, dist/**, build/**, *.min.js","例如: node_modules, dist/**, build/**, *.min.js"
+show_password,Show Password,显示密码
+hide_password,Hide Password,隐藏密码
+case_sensitive_title,Match Case,区分大小写
+whole_word_title,Match Whole Word,全字匹配
+regex_title,Use Regular Expression,使用正则表达式

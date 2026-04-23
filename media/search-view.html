@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="__CSP__" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="__CSS_URI__" />
+</head>
+<body>
+  <div class="root">
+    <div class="toolbar">
+      <div class="queryBox">
+        <input id="query" type="text" />
+        <div class="queryActions">
+          <label class="iconToggle" id="caseSensitiveToggle" data-i18n-title="case_sensitive_title">
+            <input id="caseSensitive" type="checkbox" />
+            <span class="iconSlot" id="caseSensitiveIcon" aria-hidden="true"></span>
+          </label>
+          <label class="iconToggle" id="wholeWordToggle" data-i18n-title="whole_word_title">
+            <input id="wholeWord" type="checkbox" />
+            <span class="iconSlot" id="wholeWordIcon" aria-hidden="true"></span>
+          </label>
+          <label class="iconToggle" id="useRegexToggle" data-i18n-title="regex_title">
+            <input id="useRegex" type="checkbox" />
+            <span class="iconSlot" id="useRegexIcon" aria-hidden="true"></span>
+          </label>
+          <button id="settingsButton" class="iconButton" type="button" data-i18n-title="settings_title">
+            <span class="iconSlot" id="settingsIcon" aria-hidden="true"></span>
+          </button>
+        </div>
+      </div>
+
+      <div class="fieldBlock" id="includeBlock">
+        <div class="fieldLabel" data-i18n="include_label"></div>
+        <div class="inputWrap inputWrapSmall">
+          <input id="include" type="text" />
+        </div>
+      </div>
+
+      <div class="fieldBlock" id="excludeBlock">
+        <div class="fieldLabel" data-i18n="exclude_label"></div>
+        <div class="inputWrap inputWrapSmall">
+          <input id="exclude" type="text" />
+        </div>
+      </div>
+    </div>
+
+    <div class="summary">
+      <div id="summaryText"></div>
+      <div id="workspaceName"></div>
+    </div>
+
+    <div class="results" id="results">
+      <div class="empty" data-i18n="empty_results"></div>
+    </div>
+  </div>
+
+  <div class="modalLayer" id="settingsLayer">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <div class="modalHeader">
+        <h2 class="modalTitle" id="settingsTitle" data-i18n="settings_header"></h2>
+        <button id="closeSettingsButton" class="modalClose" type="button" data-i18n-title="close_title" data-i18n-aria-label="close_title">
+          <span class="iconSlot modalCloseIcon" id="closeSettingsIcon" aria-hidden="true"></span>
+        </button>
+      </div>
+      <div class="modalBody">
+        <div class="settingsSection">
+          <h3 class="sectionTitle" data-i18n="remote_section_title"></h3>
+          <p class="sectionHint" data-i18n="remote_section_hint"></p>
+          <div class="settingsGrid">
+            <div class="fieldGroup fieldGroupRow">
+              <div class="fieldGroup fieldGroupCell">
+                <div class="fieldLabel" data-i18n="host_label"></div>
+                <input id="remoteHostInput" class="modalInput" type="text" spellcheck="false" />
+              </div>
+              <div class="fieldGroup fieldGroupCell fieldGroupCellNarrow">
+                <div class="fieldLabel" data-i18n="port_label"></div>
+                <input id="remotePortInput" class="modalInput" type="text" spellcheck="false" />
+              </div>
+            </div>
+          </div>
+          <div class="fieldGroup">
+            <div class="fieldLabel" data-i18n="username_label"></div>
+            <input id="remoteUsernameInput" class="modalInput" type="text" spellcheck="false" />
+          </div>
+          <div class="fieldGroup">
+            <div class="fieldLabel" data-i18n="password_label"></div>
+            <div class="passwordWrap">
+              <input id="remotePasswordInput" class="modalInput" type="password" spellcheck="false" />
+              <button id="togglePasswordButton" class="passwordToggle" type="button">
+                <span class="iconSlot" id="togglePasswordIcon" aria-hidden="true"></span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="settingsSection">
+          <h3 class="sectionTitle" data-i18n="filters_section_title"></h3>
+          <div class="fieldGroup">
+            <div class="fieldLabel" data-i18n="include_globs_label"></div>
+            <textarea id="includeGlobsInput" class="settingsTextarea" spellcheck="false" rows="4"></textarea>
+          </div>
+          <div class="fieldGroup">
+            <div class="fieldLabel" data-i18n="exclude_globs_label"></div>
+            <textarea id="excludeGlobsInput" class="settingsTextarea" spellcheck="false" rows="4"></textarea>
+          </div>
+        </div>
+      </div>
+
+      <div class="modalFooter">
+        <div id="connectionStatus" class="modalStatus"></div>
+        <div class="modalFooterActions">
+          <button id="testConnectionButton" class="textButton" type="button" data-i18n="test_button"></button>
+          <button id="resetSettingsButton" class="textButton" type="button" data-i18n="reset_button"></button>
+          <button id="saveSettingsButton" class="textButton primary" type="button" data-i18n="save_button"></button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script nonce="__NONCE__">
+    window.RIPGREP_TOOL_BOOTSTRAP = {
+      defaultRemotePort: __DEFAULT_REMOTE_PORT__,
+      defaultIncludeGlobs: __DEFAULT_INCLUDE_GLOBS__,
+      defaultExcludeGlobs: __DEFAULT_EXCLUDE_GLOBS__,
+      iconUris: __ICON_URIS__
+    };
+  </script>
+  <script nonce="__NONCE__" src="__JS_URI__"></script>
+</body>
+</html>

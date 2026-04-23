@@ -1,0 +1,98 @@
+{
+  "name": "ripgreptool",
+  "displayName": "Ripgrep Tool",
+  "description": "Remote ripgrep search in the sidebar. Limits and setup are in the README (extension details), not in the in-editor UI.",
+  "version": "0.0.1",
+  "publisher": "local",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.91.0"
+  },
+  "categories": [
+    "Search",
+    "Other"
+  ],
+  "activationEvents": [
+    "onView:ripgrepTool.searchView",
+    "onCommand:ripgrepTool.focusSearch"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "ripgrepTool",
+          "title": "Fast Search",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "ripgrepTool": [
+        {
+          "type": "webview",
+          "id": "ripgrepTool.searchView",
+          "name": "Workspace Search"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "ripgrepTool.focusSearch",
+        "title": "Ripgrep Tool: Focus Search"
+      }
+    ],
+    "configuration": {
+      "title": "Ripgrep Tool",
+      "properties": {
+        "ripgrepTool.binaryPath": {
+          "type": "string",
+          "default": "rg",
+          "description": "Path to the ripgrep binary."
+        },
+        "ripgrepTool.maxResults": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "Max match lines per file (ripgrep --max-count). Use 0 to omit the flag and apply no per-file cap. Not a time or total-file limit; search runs until ripgrep finishes."
+        },
+        "ripgrepTool.contextLines": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 200,
+          "description": "Context lines around each match (ripgrep --context)."
+        },
+        "ripgrepTool.resultRefreshMs": {
+          "type": "number",
+          "default": 80,
+          "minimum": 4,
+          "maximum": 20000,
+          "description": "Interval in ms for batching result UI updates while streaming."
+        },
+        "ripgrepTool.threads": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 256,
+          "description": "Ripgrep thread count. Use 0 to let ripgrep choose."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p ./",
+    "package": "npm run build && npx @vscode/vsce package --allow-missing-repository",
+    "watch": "tsc -w -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "@types/ssh2": "^1.15.5",
+    "@types/vscode": "^1.91.0",
+    "@vscode/vsce": "^3.6.2",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "ssh2": "^1.17.0"
+  }
+}
