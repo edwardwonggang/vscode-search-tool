@@ -1,5 +1,8 @@
 :root {
   color-scheme: light dark;
+  --view-pad: 8px 9px 0 9px;
+  --view-gap: 4px;
+  --view-input-r: 2px;
   --bg: var(--vscode-sideBar-background);
   --fg: var(--vscode-foreground);
   --muted: var(--vscode-descriptionForeground);
@@ -11,15 +14,23 @@
   --hover: var(--vscode-list-hoverBackground);
   --badge-bg: var(--vscode-badge-background);
   --badge-fg: var(--vscode-badge-foreground);
-  --highlight: var(--vscode-searchEditor-findMatchBackground, rgba(234, 92, 0, 0.28));
-  --overlay: color-mix(in srgb, var(--vscode-editor-background) 22%, rgba(0, 0, 0, 0.58));
+  --highlight: var(
+    --vscode-searchEditor-findMatchBackground,
+    var(--vscode-editor-findMatchHighlightBackground, rgba(234, 92, 0, 0.28))
+  );
+  --overlay: color-mix(in srgb, var(--vscode-editor-background) 18%, rgba(0, 0, 0, 0.55));
   --modal-bg: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
   --modal-border: var(--vscode-editorWidget-border, var(--vscode-panel-border));
   --modal-shadow: var(--vscode-widget-shadow, 0 2px 8px rgba(0, 0, 0, 0.36));
   --settings-section-fg: var(--vscode-settings-headerForeground, var(--vscode-foreground));
-  --scroll-thumb: rgba(128, 128, 128, 0.7);
-  --search-toggle-on: var(--vscode-textLink-foreground, #3794ff);
-  --search-toggle-off: var(--vscode-descriptionForeground);
+  --scroll-thumb: var(--vscode-scrollbarSlider-background, rgba(128, 128, 128, 0.45));
+  --scroll-thumb-hover: var(--vscode-scrollbarSlider-hoverBackground, rgba(128, 128, 128, 0.7));
+  --search-toggle-on: var(--vscode-inputOption-activeForeground, var(--vscode-textLink-foreground, #3794ff));
+  --search-toggle-on-bg: var(
+    --vscode-inputOption-activeBackground,
+    var(--vscode-toolbar-hoverBackground, color-mix(in srgb, var(--vscode-textLink-foreground) 20%, transparent))
+  );
+  --search-toggle-off: var(--vscode-icon-foreground, var(--vscode-descriptionForeground));
   --file-type-icon-size: 16px;
   --file-header-icon-col: 20px;
   --file-row-icon-offset: calc(16px + 4px);
@@ -35,7 +46,8 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-  font: 13px/1.4 var(--vscode-font-family);
+  font: 13px/1.5 var(--vscode-font-family);
+  -webkit-font-smoothing: antialiased;
   height: 100vh;
   overflow: hidden;
 }
@@ -58,80 +70,91 @@ textarea:focus-visible,
 
 .root {
   display: grid;
-  gap: 6px;
-  padding: 0;
+  gap: var(--view-gap);
+  padding: var(--view-pad);
   height: 100vh;
   min-height: 0;
   grid-template-rows: auto auto minmax(0, 1fr);
   overflow: hidden;
+  box-sizing: border-box;
 }
 
 .toolbar {
   display: grid;
   gap: 6px;
-  padding: 6px 0 4px;
+  padding: 0;
 }
 
 .queryBox {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  min-height: 28px;
-  padding: 0 6px 0 8px;
+  align-items: stretch;
+  min-height: 24px;
+  padding: 0 1px 0 3px;
   border: 1px solid var(--input-border, transparent);
+  border-radius: var(--view-input-r);
   background: var(--input-bg);
 }
 
+.queryBox:focus-within {
+  border-color: var(--focus);
+}
+
 .queryBox input[type="text"] {
-  min-height: 26px;
+  min-height: 24px;
   border: 0;
   background: transparent;
   color: var(--input-fg);
   outline: none;
   width: 100%;
-  padding: 0;
+  padding: 2px 0 2px 2px;
 }
 
 .queryActions {
   display: flex;
-  gap: 1px;
+  gap: 0;
   align-items: center;
-  margin-left: 6px;
+  align-self: center;
+  margin-left: 2px;
+  padding: 0 1px 0 0;
 }
 
 .fieldBlock {
   display: grid;
-  gap: 4px;
+  gap: 2px;
 }
 
 .fieldLabel {
   color: var(--muted);
-  font-size: 12px;
-  line-height: 18px;
-  padding: 0 0 0 1px;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.2;
+  padding: 0 0 0 0;
+  letter-spacing: 0.01em;
 }
 
 .inputWrap {
   display: flex;
   align-items: center;
-  min-height: 28px;
-  padding: 0 8px;
+  min-height: 24px;
+  padding: 0 4px 0 6px;
   border: 1px solid var(--input-border, transparent);
+  border-radius: var(--view-input-r);
   background: var(--input-bg);
 }
 
 .inputWrapSmall {
-  min-height: 26px;
+  min-height: 24px;
 }
 
 .inputWrap input[type="text"] {
-  min-height: 26px;
+  min-height: 24px;
   border: 0;
   background: transparent;
   color: var(--input-fg);
   outline: none;
   width: 100%;
-  padding: 0;
+  padding: 1px 0;
 }
 
 .iconToggle,
@@ -140,10 +163,11 @@ textarea:focus-visible,
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   padding: 0;
-  border: 1px solid transparent;
+  border: 0;
+  border-radius: var(--view-input-r);
   background: transparent;
   cursor: pointer;
 }
@@ -153,12 +177,13 @@ textarea:focus-visible,
 }
 
 .iconButton {
-  color: var(--muted);
+  color: var(--search-toggle-off);
 }
 
 .iconToggle:hover,
 .iconButton:hover {
-  background: var(--hover);
+  background: var(--vscode-inputOption-hoverBackground, var(--hover));
+  color: var(--fg);
 }
 
 .iconToggle:not(.active):hover {
@@ -167,14 +192,16 @@ textarea:focus-visible,
 
 .iconToggle.active {
   color: var(--search-toggle-on);
+  background: var(--search-toggle-on-bg);
 }
 
 .iconToggle.active:hover {
   color: var(--search-toggle-on);
+  background: var(--search-toggle-on-bg);
 }
 
 .iconButton:hover {
-  color: var(--fg);
+  color: var(--vscode-icon-foreground, var(--fg));
 }
 
 .iconToggle input {
@@ -203,14 +230,17 @@ textarea:focus-visible,
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  min-height: 18px;
-  padding: 6px 0 0;
-  border-top: 1px solid var(--border);
+  gap: 6px;
+  min-height: 16px;
+  margin-top: 1px;
+  padding: 4px 0 2px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 1.3;
   min-width: 0;
   overflow: hidden;
+  opacity: 0.95;
 }
 
 .summary > div {
@@ -223,9 +253,10 @@ textarea:focus-visible,
 .results {
   display: block;
   min-height: 0;
+  margin: 0 -1px 0 0;
+  padding: 0 0 4px 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding-bottom: 8px;
 }
 
 .results::-webkit-scrollbar {
@@ -238,7 +269,11 @@ textarea:focus-visible,
 
 .results::-webkit-scrollbar-thumb {
   background: var(--scroll-thumb);
-  border-radius: 999px;
+  border-radius: 4px;
+}
+
+.results::-webkit-scrollbar-thumb:hover {
+  background: var(--scroll-thumb-hover);
 }
 
 .results {
@@ -247,9 +282,12 @@ textarea:focus-visible,
 }
 
 .empty {
-  padding: 12px 0;
+  padding: 20px 4px 12px;
   color: var(--muted);
   font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+  opacity: 0.9;
 }
 
 .fileHeader {
@@ -258,9 +296,10 @@ textarea:focus-visible,
   align-items: center;
   gap: 4px;
   width: 100%;
-  min-height: 24px;
-  padding: 3px 0;
+  min-height: 22px;
+  padding: 1px 2px 1px 0;
   border: 0;
+  border-radius: 2px;
   background: transparent;
   color: var(--fg);
   text-align: left;
@@ -342,11 +381,12 @@ textarea:focus-visible,
   grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   min-width: 0;
-  gap: 6px;
+  gap: 4px;
   text-align: left;
-  font-size: 12px;
+  font-size: 13px;
   line-height: var(--file-type-icon-size);
   min-height: var(--file-type-icon-size);
+  font-weight: 400;
 }
 
 .fileName .base,
@@ -362,15 +402,16 @@ textarea:focus-visible,
 }
 
 .badge {
-  min-width: 20px;
-  margin-left: 8px;
-  padding: 0 6px;
-  border-radius: 999px;
+  min-width: 18px;
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 10px;
   background: var(--badge-bg);
   color: var(--badge-fg);
   text-align: center;
-  font-size: 11px;
-  line-height: 18px;
+  font-size: 10px;
+  line-height: 16px;
+  font-weight: 500;
   justify-self: end;
   flex: none;
   visibility: visible;
@@ -413,9 +454,10 @@ textarea:focus-visible,
 .match {
   display: block;
   width: 100%;
-  min-height: 22px;
-  padding: 2px 4px 2px 0;
+  min-height: 20px;
+  padding: 1px 2px 1px 0;
   border: 0;
+  border-radius: 2px;
   background: transparent;
   color: var(--fg);
   text-align: left;
@@ -429,12 +471,18 @@ textarea:focus-visible,
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--fg);
+  font: 12px/1.45 var(--vscode-editor-font-family, var(--vscode-font-family));
+  letter-spacing: 0.01em;
 }
 
 mark {
-  background: var(--highlight);
+  background: var(
+    --vscode-editor-findMatchHighlightBackground,
+    var(--vscode-searchEditor-findMatchBackground, var(--highlight))
+  );
   color: inherit;
-  padding: 0;
+  padding: 0 1px;
+  border-radius: 1px;
 }
 
 .modalLayer {
@@ -458,7 +506,7 @@ mark {
   max-height: min(85vh, 720px);
   min-height: 0;
   border: 1px solid var(--modal-border);
-  border-radius: 5px;
+  border-radius: 3px;
   background: var(--modal-bg);
   box-shadow: var(--modal-shadow);
   color: var(--vscode-foreground);
