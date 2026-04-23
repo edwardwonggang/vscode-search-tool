@@ -1,0 +1,10 @@
+node_modules/
+dist/
+*.vsix
+
+# Local / IDE / generated
+.cursor/
+.specstory/
+.tmp-icons/
+Thumbs.db
+.DS_Store
