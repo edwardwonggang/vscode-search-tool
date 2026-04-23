@@ -372,6 +372,13 @@
   function buildHighlightRegex() {
     const query = currentOptions.query || '';
     if (!query) return null;
+    if (currentOptions.definitionMode) {
+      try {
+        return new RegExp(escapeRegExp(query), 'g');
+      } catch {
+        return null;
+      }
+    }
     try {
       const source = currentOptions.useRegex ? query : escapeRegExp(query);
       const wrapped = currentOptions.wholeWord ? `\\b(?:${source})\\b` : source;
