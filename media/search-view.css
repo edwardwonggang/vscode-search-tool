@@ -1,7 +1,5 @@
 :root {
   color-scheme: light dark;
-  --view-pad: 8px 9px 0 9px;
-  --view-gap: 4px;
   --view-input-r: 2px;
   --bg: var(--vscode-sideBar-background);
   --fg: var(--vscode-foreground);
@@ -23,6 +21,11 @@
   --modal-border: var(--vscode-editorWidget-border, var(--vscode-panel-border));
   --modal-shadow: var(--vscode-widget-shadow, 0 2px 8px rgba(0, 0, 0, 0.36));
   --settings-section-fg: var(--vscode-settings-headerForeground, var(--vscode-foreground));
+  /* Aligned with workbench search view: list + match rows use UI font, 22px line */
+  --search-list-line: 22px;
+  --search-input-h: 26px;
+  --search-filter-input-h: 25px;
+  --search-messages-fg: var(--vscode-search-resultsInfoForeground, var(--vscode-descriptionForeground));
   --scroll-thumb: var(--vscode-scrollbarSlider-background, rgba(128, 128, 128, 0.45));
   --scroll-thumb-hover: var(--vscode-scrollbarSlider-hoverBackground, rgba(128, 128, 128, 0.7));
   --search-toggle-on: var(--vscode-inputOption-activeForeground, var(--vscode-textLink-foreground, #3794ff));
@@ -46,8 +49,11 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--fg);
-  font: 13px/1.5 var(--vscode-font-family);
-  -webkit-font-smoothing: antialiased;
+  /* Same stack as workbench / native Search (not editor monospace) */
+  font-family: var(--vscode-font-family);
+  font-size: 13px;
+  font-weight: normal;
+  line-height: 1.4;
   height: 100vh;
   overflow: hidden;
 }
@@ -70,8 +76,9 @@ textarea:focus-visible,
 
 .root {
   display: grid;
-  gap: var(--view-gap);
-  padding: var(--view-pad);
+  gap: 0;
+  /* mirrors .search-view .search-widgets-container + list insets */
+  padding: 0;
   height: 100vh;
   min-height: 0;
   grid-template-rows: auto auto minmax(0, 1fr);
@@ -81,16 +88,18 @@ textarea:focus-visible,
 
 .toolbar {
   display: grid;
-  gap: 6px;
-  padding: 0;
+  gap: 0;
+  margin: 0 12px 0 2px;
+  padding: 6px 0 6px;
+  box-sizing: border-box;
 }
 
 .queryBox {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: stretch;
-  min-height: 24px;
-  padding: 0 1px 0 3px;
+  min-height: var(--search-input-h);
+  padding: 0 2px 0 0;
   border: 1px solid var(--input-border, transparent);
   border-radius: var(--view-input-r);
   background: var(--input-bg);
@@ -101,13 +110,17 @@ textarea:focus-visible,
 }
 
 .queryBox input[type="text"] {
-  min-height: 24px;
+  min-height: var(--search-input-h);
   border: 0;
   background: transparent;
   color: var(--input-fg);
   outline: none;
   width: 100%;
-  padding: 2px 0 2px 2px;
+  /* matches monaco find input in searchview.css */
+  padding: 3px 0 3px 6px;
+  font-family: var(--vscode-font-family);
+  font-size: 13px;
+  line-height: 1.4;
 }
 
 .queryActions {
@@ -121,40 +134,49 @@ textarea:focus-visible,
 
 .fieldBlock {
   display: grid;
-  gap: 2px;
+  gap: 0;
+  margin-top: 6px;
+}
+
+.fieldBlock:first-of-type {
+  margin-top: 0;
 }
 
 .fieldLabel {
   color: var(--muted);
   font-size: 11px;
-  font-weight: 400;
+  font-weight: normal;
   line-height: 1.2;
-  padding: 0 0 0 0;
-  letter-spacing: 0.01em;
+  padding: 0;
 }
 
 .inputWrap {
   display: flex;
   align-items: center;
-  min-height: 24px;
-  padding: 0 4px 0 6px;
+  min-height: var(--search-filter-input-h);
+  height: var(--search-filter-input-h);
+  padding: 0 4px 0 0;
   border: 1px solid var(--input-border, transparent);
   border-radius: var(--view-input-r);
   background: var(--input-bg);
 }
 
 .inputWrapSmall {
-  min-height: 24px;
+  min-height: var(--search-filter-input-h);
+  height: var(--search-filter-input-h);
 }
 
 .inputWrap input[type="text"] {
-  min-height: 24px;
+  min-height: var(--search-filter-input-h);
   border: 0;
   background: transparent;
   color: var(--input-fg);
   outline: none;
   width: 100%;
-  padding: 1px 0;
+  padding: 2px 0 2px 6px;
+  font-family: var(--vscode-font-family);
+  font-size: 13px;
+  line-height: 1.4;
 }
 
 .iconToggle,
@@ -231,16 +253,16 @@ textarea:focus-visible,
   align-items: center;
   justify-content: space-between;
   gap: 6px;
-  min-height: 16px;
-  margin-top: 1px;
-  padding: 4px 0 2px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  color: var(--muted);
-  font-size: 11px;
-  line-height: 1.3;
+  min-height: 1em;
+  margin: 0 12px 0 2px;
+  padding: 4px 0 6px;
+  border: 0;
+  color: var(--search-messages-fg);
+  font-size: 13px;
+  font-weight: normal;
+  line-height: 1.4;
   min-width: 0;
   overflow: hidden;
-  opacity: 0.95;
 }
 
 .summary > div {
@@ -253,7 +275,7 @@ textarea:focus-visible,
 .results {
   display: block;
   min-height: 0;
-  margin: 0 -1px 0 0;
+  margin: 0;
   padding: 0 0 4px 0;
   overflow-y: auto;
   overflow-x: hidden;
@@ -282,12 +304,11 @@ textarea:focus-visible,
 }
 
 .empty {
-  padding: 20px 4px 12px;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.5;
+  padding: 4px 22px 8px 22px;
+  color: var(--search-messages-fg);
+  font-size: 13px;
+  line-height: 1.4;
   text-align: left;
-  opacity: 0.9;
 }
 
 .fileHeader {
@@ -296,13 +317,17 @@ textarea:focus-visible,
   align-items: center;
   gap: 4px;
   width: 100%;
-  min-height: 22px;
-  padding: 1px 2px 1px 0;
+  min-height: var(--search-list-line);
+  line-height: var(--search-list-line);
+  padding: 0;
   border: 0;
-  border-radius: 2px;
+  border-radius: 0;
   background: transparent;
   color: var(--fg);
   text-align: left;
+  font-family: var(--vscode-font-family);
+  font-size: 13px;
+  font-weight: normal;
   cursor: pointer;
 }
 
@@ -384,9 +409,9 @@ textarea:focus-visible,
   gap: 4px;
   text-align: left;
   font-size: 13px;
-  line-height: var(--file-type-icon-size);
-  min-height: var(--file-type-icon-size);
-  font-weight: 400;
+  line-height: var(--search-list-line);
+  min-height: var(--search-list-line);
+  font-weight: normal;
 }
 
 .fileName .base,
@@ -402,20 +427,23 @@ textarea:focus-visible,
 }
 
 .badge {
-  min-width: 18px;
-  margin-left: 4px;
-  padding: 0 5px;
-  border-radius: 10px;
+  min-width: 2ch;
+  margin-left: 8px;
+  margin-right: 0;
+  padding: 0 4px;
+  border-radius: 11px;
   background: var(--badge-bg);
   color: var(--badge-fg);
   text-align: center;
-  font-size: 10px;
+  font-family: var(--vscode-font-family);
+  font-size: 11px;
   line-height: 16px;
-  font-weight: 500;
+  font-weight: 400;
   justify-self: end;
   flex: none;
   visibility: visible;
   opacity: 1;
+  box-sizing: border-box;
 }
 
 .matches {
@@ -454,35 +482,43 @@ textarea:focus-visible,
 .match {
   display: block;
   width: 100%;
-  min-height: 20px;
-  padding: 1px 2px 1px 0;
+  min-height: var(--search-list-line);
+  line-height: var(--search-list-line);
+  padding: 0;
   border: 0;
-  border-radius: 2px;
+  border-radius: 0;
   background: transparent;
   color: var(--fg);
   text-align: left;
+  font-family: var(--vscode-font-family);
+  font-size: 13px;
+  font-weight: 400;
   cursor: pointer;
 }
 
 .preview {
   display: block;
   min-width: 0;
-  white-space: nowrap;
+  /* Native .linematch > .match (searchview.css) */
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: pre;
   color: var(--fg);
-  font: 12px/1.45 var(--vscode-editor-font-family, var(--vscode-font-family));
-  letter-spacing: 0.01em;
+  font-family: var(--vscode-font-family);
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 400;
+  line-height: var(--search-list-line);
 }
 
 mark {
-  background: var(
-    --vscode-editor-findMatchHighlightBackground,
-    var(--vscode-searchEditor-findMatchBackground, var(--highlight))
-  );
+  /* Native .search-view .findInFileMatch */
+  background-color: var(--vscode-editor-findMatchHighlightBackground, var(--highlight));
   color: inherit;
-  padding: 0 1px;
-  border-radius: 1px;
+  border: 1px solid var(--vscode-editor-findMatchHighlightBorder, transparent);
+  border-radius: 0;
+  padding: 0;
+  margin: 0;
 }
 
 .modalLayer {
