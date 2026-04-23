@@ -8,3 +8,6 @@ dist/
 .tmp-icons/
 Thumbs.db
 .DS_Store
+
+# Redundant with extracted `ripgrep-*-musl/` (fetch separately if needed)
+assets/bin/ripgrep-linux.tar.gz
