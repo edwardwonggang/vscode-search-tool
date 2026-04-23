@@ -782,6 +782,54 @@ mark {
   line-height: 1.45;
 }
 
+.ctagsProgressRow {
+  margin: 0 var(--view-edge-inset);
+  padding: 0 0 4px;
+}
+
+.ctagsProgressRow[hidden] {
+  display: none !important;
+}
+
+.ctagsProgressTrack {
+  height: 3px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--fg) 12%, transparent);
+  overflow: hidden;
+}
+
+.ctagsProgressIndeterminate {
+  height: 100%;
+  width: 35%;
+  border-radius: 2px;
+  background: var(--vscode-progressBar-background, var(--vscode-textLink-foreground, #3794ff));
+  animation: ctagsIndet 1.1s ease-in-out infinite;
+}
+
+@keyframes ctagsIndet {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+
+#definitionModeToggle.active {
+  color: var(--vscode-textLink-foreground, #3794ff);
+  background: color-mix(in srgb, var(--vscode-textLink-foreground, #3794ff) 18%, transparent);
+}
+
+.root.definitionSearch .fieldBlock {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.root.definitionSearch .iconToggle:not(#definitionModeToggle) {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
 .modalFooter {
   display: flex;
   flex-wrap: wrap;
@@ -791,6 +839,10 @@ mark {
   padding: 8px 10px 8px 12px;
   border-top: 1px solid var(--border);
   background: var(--vscode-sideBarTitle-background, var(--modal-bg));
+}
+
+.modalFooterLeft {
+  flex: 0 0 auto;
 }
 
 .modalStatus {

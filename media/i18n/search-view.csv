@@ -29,3 +29,14 @@ hide_password,Hide Password,隐藏密码
 case_sensitive_title,Match Case,区分大小写
 whole_word_title,Match Whole Word,全字匹配
 regex_title,Use Regular Expression,使用正则表达式
+definition_mode_title,Definition search (ctags; exact symbol),按定义搜索（ctags，完整符号名）
+ctags_building,Building tag index on server…,正在在服务器上构建标签索引…
+ctags_build_done,Tag index ready.,标签索引已就绪。
+ctags_build_failed,ctags failed. Check the output channel for details.,ctags 失败。请查看输出通道中的详细信息。
+err_not_git_workspace,Open the Git repository root as the workspace folder (e.g. trunk) so "git branch" works.,请把 Git 仓库根目录作为工作区文件夹打开（例如 trunk），使「git branch」能执行。
+err_ctags_missing,No ctags on the server and no bundled ctags. Add assets/bin/ctags or install ctags on the server.,服务器上未找到 ctags，且扩展未带内置 ctags。请将可执行文件放入 assets/bin/ctags，或在服务器上安装 ctags。
+def_searching,Resolving symbol…,正在解析符号…
+def_no_results,No definition matches,无定义匹配
+rebuild_tags_button,Rebuild tags,重建 tags
+rebuild_tags_start,Rebuilding tag index on server…,正在在服务器上重建标签索引…
+rebuild_tags_done,Tag index rebuilt.,已重建标签索引。

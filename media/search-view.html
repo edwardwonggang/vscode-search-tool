@@ -24,6 +24,10 @@
             <input id="useRegex" type="checkbox" />
             <span class="iconSlot" id="useRegexIcon" aria-hidden="true"></span>
           </label>
+          <label class="iconToggle" id="definitionModeToggle" data-i18n-title="definition_mode_title">
+            <input id="definitionMode" type="checkbox" />
+            <span class="iconSlot" id="definitionModeIcon" aria-hidden="true"></span>
+          </label>
           <button id="settingsButton" class="iconButton" type="button" data-i18n-title="settings_title">
             <span class="iconSlot" id="settingsIcon" aria-hidden="true"></span>
           </button>
@@ -42,6 +46,12 @@
         <div class="inputWrap inputWrapSmall">
           <input id="exclude" type="text" />
         </div>
+      </div>
+    </div>
+
+    <div id="ctagsProgressRow" class="ctagsProgressRow" hidden>
+      <div class="ctagsProgressTrack" role="progressbar" aria-label="">
+        <div class="ctagsProgressIndeterminate" id="ctagsProgressIndeterminate"></div>
       </div>
     </div>
 
@@ -109,6 +119,9 @@
 
       <div class="modalFooter">
         <div id="connectionStatus" class="modalStatus"></div>
+        <div class="modalFooterLeft">
+          <button id="rebuildTagsButton" class="textButton" type="button" data-i18n="rebuild_tags_button"></button>
+        </div>
         <div class="modalFooterActions">
           <button id="testConnectionButton" class="textButton" type="button" data-i18n="test_button"></button>
           <button id="resetSettingsButton" class="textButton" type="button" data-i18n="reset_button"></button>

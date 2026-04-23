@@ -12,6 +12,8 @@
   const caseSensitiveEl = document.getElementById('caseSensitive');
   const wholeWordEl = document.getElementById('wholeWord');
   const useRegexEl = document.getElementById('useRegex');
+  const definitionModeEl = document.getElementById('definitionMode');
+  const definitionModeToggleEl = document.getElementById('definitionModeToggle');
   const settingsButton = document.getElementById('settingsButton');
   const summaryTextEl = document.getElementById('summaryText');
   const workspaceNameEl = document.getElementById('workspaceName');
@@ -30,12 +32,15 @@
   const connectionStatusEl = document.getElementById('connectionStatus');
   const resetSettingsButtonEl = document.getElementById('resetSettingsButton');
   const saveSettingsButtonEl = document.getElementById('saveSettingsButton');
+  const rebuildTagsButtonEl = document.getElementById('rebuildTagsButton');
+  const ctagsProgressRowEl = document.getElementById('ctagsProgressRow');
 
   const vscodeState = vscode.getState() || {};
   const togglePairs = [
     [document.getElementById('caseSensitiveToggle'), caseSensitiveEl],
     [document.getElementById('wholeWordToggle'), wholeWordEl],
-    [document.getElementById('useRegexToggle'), useRegexEl]
+    [document.getElementById('useRegexToggle'), useRegexEl],
+    [definitionModeToggleEl, definitionModeEl]
   ];
 
   let translations = {};
@@ -95,11 +100,13 @@
   caseSensitiveEl.checked = !!vscodeState.caseSensitive;
   wholeWordEl.checked = !!vscodeState.wholeWord;
   useRegexEl.checked = !!vscodeState.useRegex;
+  definitionModeEl.checked = !!vscodeState.definitionMode;
   if (typeof vscodeState.summaryText === 'string') summaryTextEl.textContent = vscodeState.summaryText;
   if (typeof vscodeState.workspaceName === 'string') workspaceNameEl.textContent = vscodeState.workspaceName;
   if (typeof vscodeState.resultsHtml === 'string') resultsEl.innerHTML = vscodeState.resultsHtml;
 
   void initializeIcons();
+  syncDefinitionRootClass();
 
   function imgIcon(src, cls = 'iconImg') {
     return `<img class="${cls}" src="${src}" alt="" />`;
@@ -142,12 +149,13 @@
       return [key, svg];
     });
 
-    const [caseSensitiveSvg, wholeWordSvg, regexSvg, settingsSvg, eyeSvg, eyeClosedSvg, chevronRightSvg, chevronDownSvg, closeSvg, ...fileTypeResults] =
+    const [caseSensitiveSvg, wholeWordSvg, regexSvg, settingsSvg, definitionSvg, eyeSvg, eyeClosedSvg, chevronRightSvg, chevronDownSvg, closeSvg, ...fileTypeResults] =
       await Promise.all([
         loadSvgMarkup(iconUris.caseSensitive),
         loadSvgMarkup(iconUris.wholeWord),
         loadSvgMarkup(iconUris.regex),
         loadSvgMarkup(iconUris.settings),
+        loadSvgMarkup(iconUris.definition),
         loadSvgMarkup(iconUris.eye),
         loadSvgMarkup(iconUris.eyeClosed),
         loadSvgMarkup(iconUris.chevronRight),
@@ -184,6 +192,7 @@
     setIcon('caseSensitiveIcon', caseSensitiveSvg, 'Aa');
     setIcon('wholeWordIcon', wholeWordSvg, 'W');
     setIcon('useRegexIcon', regexSvg, '.*');
+    setIcon('definitionModeIcon', definitionSvg, 'D');
     setIcon('settingsIcon', settingsSvg, '&#9881;');
     setIcon('closeSettingsIcon', closeSvg, '×');
     setIcon('togglePasswordIcon', eyeSvg || icons.eye, '&#128065;');
@@ -232,6 +241,13 @@
     }
   }
 
+  function syncDefinitionRootClass() {
+    const root = document.querySelector('.root');
+    if (root) {
+      root.classList.toggle('definitionSearch', definitionModeEl.checked);
+    }
+  }
+
   function getPayload() {
     return {
       query: queryEl.value,
@@ -239,7 +255,8 @@
       exclude: excludeEl.value,
       caseSensitive: caseSensitiveEl.checked,
       wholeWord: wholeWordEl.checked,
-      useRegex: useRegexEl.checked
+      useRegex: useRegexEl.checked,
+      definitionMode: definitionModeEl.checked
     };
   }
 
@@ -401,6 +418,7 @@
     for (const [toggle, input] of togglePairs) {
       toggle.classList.toggle('active', input.checked);
     }
+    syncDefinitionRootClass();
     persistState();
     if (String(queryEl.value).trim()) {
       clearSearchDebounce();
@@ -425,6 +443,7 @@
       caseSensitive: caseSensitiveEl.checked,
       wholeWord: wholeWordEl.checked,
       useRegex: useRegexEl.checked,
+      definitionMode: definitionModeEl.checked,
       collapsedFiles: Array.from(collapsedFiles),
       summaryText: summaryTextEl.textContent || '',
       workspaceName: workspaceNameEl.textContent || '',
@@ -492,6 +511,7 @@
   caseSensitiveEl.addEventListener('change', syncToggleState);
   wholeWordEl.addEventListener('change', syncToggleState);
   useRegexEl.addEventListener('change', syncToggleState);
+  definitionModeEl.addEventListener('change', syncToggleState);
   queryEl.addEventListener('input', () => {
     persistState();
     scheduleSearchFromQueryInput();
@@ -514,6 +534,11 @@
     vscode.postMessage({ type: 'testConnection', payload: buildSettingsPayload() });
   });
   saveSettingsButtonEl.addEventListener('click', saveSettings);
+  if (rebuildTagsButtonEl) {
+    rebuildTagsButtonEl.addEventListener('click', () => {
+      vscode.postMessage({ type: 'rebuildTags' });
+    });
+  }
   togglePasswordButtonEl.addEventListener('click', () => {
     remotePasswordInputEl.type = remotePasswordInputEl.type === 'password' ? 'text' : 'password';
     syncPasswordToggle();
@@ -549,6 +574,7 @@
       currentSettings = message.payload.settings || currentSettings;
       workspaceNameEl.textContent = message.payload.workspaceName || '';
       applyTranslations();
+      syncDefinitionRootClass();
       if (message.payload.state) {
         summaryTextEl.textContent = message.payload.state.error || message.payload.state.summary || '';
       }
@@ -561,6 +587,13 @@
     if (message.type === 'focus') queryEl.focus();
     if (message.type === 'state') {
       summaryTextEl.textContent = message.error || message.summary || '';
+      if (ctagsProgressRowEl) {
+        ctagsProgressRowEl.hidden = !message.ctagsInProgress;
+        const track = ctagsProgressRowEl.querySelector('.ctagsProgressTrack');
+        if (track) {
+          track.setAttribute('aria-label', message.summary || message.error || '');
+        }
+      }
       persistState();
     }
     if (message.type === 'results') renderResults(message.items);
