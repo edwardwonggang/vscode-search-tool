@@ -678,26 +678,40 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
   private async openMatch(match: SearchMatch): Promise<void> {
     // preview:false 会创建固定标签，后续 showTextDocument 不会替换，导致每个文件一个新 TAB。
     // 使用 preview:true + 切换文件时关闭上一次的“搜索结果”标签，保证始终只占用一个页签位置。
+    this.outputChannel.appendLine(`[Ripgrep] openMatch: rawPath="${match.path}", normalized="${path.normalize(match.path)}", line=${match.line}, preview="${match.preview}"`);
     const nextUri = vscode.Uri.file(match.path);
     this.invalidateSearchResultViewColumnIfEmpty();
 
     if (this.lastSearchResultUri && !this.uriPathsEqual(this.lastSearchResultUri, nextUri) && this.searchResultViewColumn !== undefined) {
+      this.outputChannel.appendLine(`[Ripgrep] closing previous search result tab: ${this.lastSearchResultUri.fsPath}`);
       await this.tryCloseSearchResultTab(this.lastSearchResultUri, this.searchResultViewColumn);
       this.invalidateSearchResultViewColumnIfEmpty();
     }
 
-    const document = await vscode.workspace.openTextDocument(nextUri);
-    const showOptions: vscode.TextDocumentShowOptions = {
-      preview: true,
-      preserveFocus: false
-    };
-    if (this.searchResultViewColumn !== undefined) {
-      showOptions.viewColumn = this.searchResultViewColumn;
+    try {
+      this.outputChannel.appendLine(`[Ripgrep] Attempting to open document: ${nextUri.fsPath}`);
+      const document = await vscode.workspace.openTextDocument(nextUri);
+      this.outputChannel.appendLine(`[Ripgrep] opened document: ${document.uri.fsPath}, scheme: ${document.uri.scheme}`);
+      const showOptions: vscode.TextDocumentShowOptions = {
+        preview: true,
+        preserveFocus: false
+      };
+      if (this.searchResultViewColumn !== undefined) {
+        showOptions.viewColumn = this.searchResultViewColumn;
+        this.outputChannel.appendLine(`[Ripgrep] Using viewColumn: ${this.searchResultViewColumn}`);
+      }
+      const editor = await vscode.window.showTextDocument(document, showOptions);
+      this.searchResultViewColumn = editor.viewColumn;
+      this.lastSearchResultUri = editor.document.uri;
+      this.updateEditorSelection(editor, match);
+      this.outputChannel.appendLine(`[Ripgrep] successfully opened match at line ${match.line}, editor viewColumn: ${editor.viewColumn}`);
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      const errStack = error instanceof Error ? error.stack : 'No stack';
+      this.outputChannel.appendLine(`[Ripgrep] ERROR opening document: ${errMsg}`);
+      this.outputChannel.appendLine(`[Ripgrep] ERROR stack: ${errStack}`);
+      throw error;
     }
-    const editor = await vscode.window.showTextDocument(document, showOptions);
-    this.searchResultViewColumn = editor.viewColumn;
-    this.lastSearchResultUri = editor.document.uri;
-    this.updateEditorSelection(editor, match);
   }
 
   private uriPathsEqual(a: vscode.Uri, b: vscode.Uri): boolean {
@@ -1165,44 +1179,60 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     line: string,
     query: string,
     workspaceRoot: string,
-    gitTopRemote: string
+    tagsBaseRemote: string
   ): SearchMatch | null {
+    this.outputChannel.appendLine(`[Ripgrep] parseTagResultLine: query="${query}", line="${line.substring(0, 80)}..."`);
     const firstTab = line.indexOf('\t');
     if (firstTab <= 0) {
+      this.outputChannel.appendLine('[Ripgrep] parseTagResultLine: no first tab, returning null');
       return null;
     }
     const name = line.slice(0, firstTab);
     if (name !== query) {
+      this.outputChannel.appendLine(`[Ripgrep] parseTagResultLine: name="${name}" != query="${query}", returning null`);
       return null;
     }
     const rest = line.slice(firstTab + 1);
     const secondTab = rest.indexOf('\t');
     if (secondTab <= 0) {
+      this.outputChannel.appendLine('[Ripgrep] parseTagResultLine: no second tab, returning null');
       return null;
     }
     const fileRel = rest.slice(0, secondTab);
     const after = rest.slice(secondTab + 1);
+    this.outputChannel.appendLine(`[Ripgrep] parseTagResultLine: fileRel="${fileRel}", after="${after.substring(0, 40)}..."`);
     const lineNumMatch = /line:(\d+)/u.exec(after);
     const lineNo = lineNumMatch ? Number.parseInt(lineNumMatch[1] ?? '1', 10) : 1;
     const semi = after.indexOf(';"');
     const excmd = semi >= 0 ? after.slice(0, semi) : after;
     const preview = excmd.length > 200 ? excmd.slice(0, 200) + '...' : excmd;
+    // ctags `--tag-relative=yes` writes file paths relative to the tags file directory.
+    // Resolve against that directory so preview/open works even when the tags file is not
+    // stored inside the repo root.
     const remoteFileAbs = fileRel.startsWith('/')
       ? fileRel
-      : posixPath.join(gitTopRemote.replace(/\/+$/u, ''), fileRel);
+      : posixPath.resolve(tagsBaseRemote, fileRel);
+    this.outputChannel.appendLine(`[Ripgrep] parseTagResultLine: remoteFileAbs="${remoteFileAbs}"`);
     let localPath: string;
     try {
       localPath = this.mapRemoteToLocalRemote(remoteFileAbs);
-    } catch {
+      this.outputChannel.appendLine(`[Ripgrep] parseTagResultLine: mapped to localPath="${localPath}"`);
+    } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
+      this.outputChannel.appendLine(`[Ripgrep] parseTagResultLine: mapRemoteToLocalRemote failed: ${errMsg}`);
+      // Fallback: try using workspace root (handles cases where mapRemoteToLocalRemote fails)
       localPath = path.join(workspaceRoot, fileRel.split('/').join(path.sep));
+      this.outputChannel.appendLine(`[Ripgrep] parseTagResultLine: fallback localPath="${localPath}"`);
     }
-    return {
+    const result = {
       path: localPath,
       line: lineNo,
       column: 1,
       endColumn: 2,
       preview: preview || name
     };
+    this.outputChannel.appendLine(`[Ripgrep] parseTagResultLine: returning path="${localPath}"`);
+    return result;
   }
 
   private async runDefinitionSearch(
@@ -1274,7 +1304,7 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
         if (token !== this.searchToken) {
           return;
         }
-        const m = this.parseTagResultLine(line, query, workspaceFolder.uri.fsPath, gitTop);
+        const m = this.parseTagResultLine(line, query, workspaceFolder.uri.fsPath, tagsDir);
         if (!m) {
           continue;
         }
