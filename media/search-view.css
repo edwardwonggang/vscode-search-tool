@@ -34,10 +34,12 @@
     var(--vscode-toolbar-hoverBackground, color-mix(in srgb, var(--vscode-textLink-foreground) 20%, transparent))
   );
   --search-toggle-off: var(--vscode-icon-foreground, var(--vscode-descriptionForeground));
+  /* Horizontal inset from webview edge (tighter than workbench default) */
+  --view-edge-inset: 3px;
   --file-type-icon-size: 16px;
   --file-header-icon-col: 20px;
-  --file-row-icon-offset: calc(16px + 4px);
-  --file-tree-inline: 8px;
+  --file-row-icon-offset: calc(16px + 2px);
+  --file-tree-inline: 6px;
   --file-tree-stroke: var(--vscode-tree-inactiveIndentGuidesStroke, var(--vscode-tree-indentGuidesStroke, var(--border)));
 }
 
@@ -89,8 +91,8 @@ textarea:focus-visible,
 .toolbar {
   display: grid;
   gap: 0;
-  margin: 0 12px 0 2px;
-  padding: 6px 0 6px;
+  margin: 0 var(--view-edge-inset);
+  padding: 3px 0 4px;
   box-sizing: border-box;
 }
 
@@ -116,8 +118,8 @@ textarea:focus-visible,
   color: var(--input-fg);
   outline: none;
   width: 100%;
-  /* matches monaco find input in searchview.css */
-  padding: 3px 0 3px 6px;
+  /* matches monaco find input; left inset kept small for narrow side bar */
+  padding: 3px 0 3px 4px;
   font-family: var(--vscode-font-family);
   font-size: 13px;
   line-height: 1.4;
@@ -135,7 +137,7 @@ textarea:focus-visible,
 .fieldBlock {
   display: grid;
   gap: 0;
-  margin-top: 6px;
+  margin-top: 4px;
 }
 
 .fieldBlock:first-of-type {
@@ -173,7 +175,7 @@ textarea:focus-visible,
   color: var(--input-fg);
   outline: none;
   width: 100%;
-  padding: 2px 0 2px 6px;
+  padding: 2px 0 2px 4px;
   font-family: var(--vscode-font-family);
   font-size: 13px;
   line-height: 1.4;
@@ -252,10 +254,10 @@ textarea:focus-visible,
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
+  gap: 4px;
   min-height: 1em;
-  margin: 0 12px 0 2px;
-  padding: 4px 0 6px;
+  margin: 0 var(--view-edge-inset);
+  padding: 2px 0 3px;
   border: 0;
   color: var(--search-messages-fg);
   font-size: 13px;
@@ -276,7 +278,7 @@ textarea:focus-visible,
   display: block;
   min-height: 0;
   margin: 0;
-  padding: 0 0 4px 0;
+  padding: 0 0 2px 0;
   overflow-y: auto;
   overflow-x: hidden;
 }
@@ -304,7 +306,7 @@ textarea:focus-visible,
 }
 
 .empty {
-  padding: 4px 22px 8px 22px;
+  padding: 2px var(--view-edge-inset) 6px;
   color: var(--search-messages-fg);
   font-size: 13px;
   line-height: 1.4;
@@ -452,7 +454,7 @@ textarea:focus-visible,
   display: grid;
   gap: 0;
   padding-left: var(--file-row-icon-offset);
-  padding-bottom: 4px;
+  padding-bottom: 2px;
 }
 
 /* Tree-style guide: vertical line under the chevron column, through match rows (Explorer-like) */
