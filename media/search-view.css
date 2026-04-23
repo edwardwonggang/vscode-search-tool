@@ -820,11 +820,6 @@ mark {
   background: color-mix(in srgb, var(--vscode-textLink-foreground, #3794ff) 18%, transparent);
 }
 
-.root.definitionSearch .fieldBlock {
-  opacity: 0.45;
-  pointer-events: none;
-}
-
 .root.definitionSearch .iconToggle:not(#definitionModeToggle) {
   opacity: 0.45;
   pointer-events: none;

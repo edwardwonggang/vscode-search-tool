@@ -281,7 +281,7 @@
     postSearchToExtension(true);
   }
 
-  function scheduleSearchFromQueryInput() {
+  function scheduleSearchRefresh() {
     clearSearchDebounce();
     const q = String(queryEl.value).trim();
     if (!q) {
@@ -500,6 +500,9 @@
   function saveSettings() {
     vscode.postMessage({ type: 'saveSettings', payload: buildSettingsPayload() });
     closeSettings();
+    if (String(queryEl.value).trim()) {
+      scheduleSearchRefresh();
+    }
   }
 
   queryEl.addEventListener('keydown', (event) => {
@@ -521,10 +524,16 @@
   definitionModeEl.addEventListener('change', syncToggleState);
   queryEl.addEventListener('input', () => {
     persistState();
-    scheduleSearchFromQueryInput();
+    scheduleSearchRefresh();
   });
-  includeEl.addEventListener('input', persistState);
-  excludeEl.addEventListener('input', persistState);
+  includeEl.addEventListener('input', () => {
+    persistState();
+    scheduleSearchRefresh();
+  });
+  excludeEl.addEventListener('input', () => {
+    persistState();
+    scheduleSearchRefresh();
+  });
   settingsButton.addEventListener('click', openSettings);
   closeSettingsButtonEl.addEventListener('click', closeSettings);
   resetSettingsButtonEl.addEventListener('click', () => {
