@@ -35,7 +35,7 @@
   );
   --search-toggle-off: var(--vscode-icon-foreground, var(--vscode-descriptionForeground));
   /* Horizontal inset from webview edge (tighter than workbench default) */
-  --view-edge-inset: 3px;
+  --view-edge-inset: 1px;
   --file-type-icon-size: 16px;
   --file-header-icon-col: 20px;
   --file-row-icon-offset: calc(16px + 2px);
@@ -92,7 +92,7 @@ textarea:focus-visible,
   display: grid;
   gap: 0;
   margin: 0 var(--view-edge-inset);
-  padding: 3px 0 4px;
+  padding: 2px 0 3px;
   box-sizing: border-box;
 }
 
@@ -119,7 +119,7 @@ textarea:focus-visible,
   outline: none;
   width: 100%;
   /* matches monaco find input; left inset kept small for narrow side bar */
-  padding: 3px 0 3px 4px;
+  padding: 3px 0 3px 2px;
   font-family: var(--vscode-font-family);
   font-size: 13px;
   line-height: 1.4;
@@ -130,8 +130,8 @@ textarea:focus-visible,
   gap: 0;
   align-items: center;
   align-self: center;
-  margin-left: 2px;
-  padding: 0 1px 0 0;
+  margin-left: 1px;
+  padding: 0;
 }
 
 .fieldBlock {
@@ -157,7 +157,7 @@ textarea:focus-visible,
   align-items: center;
   min-height: var(--search-filter-input-h);
   height: var(--search-filter-input-h);
-  padding: 0 4px 0 0;
+  padding: 0 2px 0 0;
   border: 1px solid var(--input-border, transparent);
   border-radius: var(--view-input-r);
   background: var(--input-bg);
@@ -175,7 +175,7 @@ textarea:focus-visible,
   color: var(--input-fg);
   outline: none;
   width: 100%;
-  padding: 2px 0 2px 4px;
+  padding: 2px 0 2px 2px;
   font-family: var(--vscode-font-family);
   font-size: 13px;
   line-height: 1.4;
@@ -254,10 +254,10 @@ textarea:focus-visible,
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 4px;
+  gap: 2px;
   min-height: 1em;
   margin: 0 var(--view-edge-inset);
-  padding: 2px 0 3px;
+  padding: 1px 0 2px;
   border: 0;
   color: var(--search-messages-fg);
   font-size: 13px;
