@@ -425,8 +425,69 @@ textarea:focus-visible,
 }
 
 .fileName .dir {
-  color: var(--muted);
+  opacity: 1;
 }
+
+.fileNameColor0 .base { color: #e85d75; }
+.fileNameColor0 .dir { color: #e85d75bf; }
+.fileNameColor1 .base { color: #d6a529; }
+.fileNameColor1 .dir { color: #d6a529bf; }
+.fileNameColor2 .base { color: #3aa2d8; }
+.fileNameColor2 .dir { color: #3aa2d8bf; }
+.fileNameColor3 .base { color: #6fb34f; }
+.fileNameColor3 .dir { color: #6fb34fbf; }
+.fileNameColor4 .base { color: #9a72d8; }
+.fileNameColor4 .dir { color: #9a72d8bf; }
+.fileNameColor5 .base { color: #e37a34; }
+.fileNameColor5 .dir { color: #e37a34bf; }
+.fileNameColor6 .base { color: #28aa96; }
+.fileNameColor6 .dir { color: #28aa96bf; }
+.fileNameColor7 .base { color: #d35fb6; }
+.fileNameColor7 .dir { color: #d35fb6bf; }
+.fileNameColor8 .base { color: #92ac34; }
+.fileNameColor8 .dir { color: #92ac34bf; }
+.fileNameColor9 .base { color: #5d7fe0; }
+.fileNameColor9 .dir { color: #5d7fe0bf; }
+.fileNameColor10 .base { color: #df6f55; }
+.fileNameColor10 .dir { color: #df6f55bf; }
+.fileNameColor11 .base { color: #3a9b73; }
+.fileNameColor11 .dir { color: #3a9b73bf; }
+.fileNameColor12 .base { color: #c5982d; }
+.fileNameColor12 .dir { color: #c5982dbf; }
+.fileNameColor13 .base { color: #8567cf; }
+.fileNameColor13 .dir { color: #8567cfbf; }
+.fileNameColor14 .base { color: #20a3b6; }
+.fileNameColor14 .dir { color: #20a3b6bf; }
+.fileNameColor15 .base { color: #e24f66; }
+.fileNameColor15 .dir { color: #e24f66bf; }
+.fileNameColor16 .base { color: #c4b43a; }
+.fileNameColor16 .dir { color: #c4b43abf; }
+.fileNameColor17 .base { color: #50a786; }
+.fileNameColor17 .dir { color: #50a786bf; }
+.fileNameColor18 .base { color: #b46bd1; }
+.fileNameColor18 .dir { color: #b46bd1bf; }
+.fileNameColor19 .base { color: #6793df; }
+.fileNameColor19 .dir { color: #6793dfbf; }
+.fileNameColor20 .base { color: #de8e36; }
+.fileNameColor20 .dir { color: #de8e36bf; }
+.fileNameColor21 .base { color: #39b8a8; }
+.fileNameColor21 .dir { color: #39b8a8bf; }
+.fileNameColor22 .base { color: #d45d91; }
+.fileNameColor22 .dir { color: #d45d91bf; }
+.fileNameColor23 .base { color: #88b83d; }
+.fileNameColor23 .dir { color: #88b83dbf; }
+.fileNameColor24 .base { color: #8a68e8; }
+.fileNameColor24 .dir { color: #8a68e8bf; }
+.fileNameColor25 .base { color: #35a7ce; }
+.fileNameColor25 .dir { color: #35a7cebf; }
+.fileNameColor26 .base { color: #e06f48; }
+.fileNameColor26 .dir { color: #e06f48bf; }
+.fileNameColor27 .base { color: #6d9b55; }
+.fileNameColor27 .dir { color: #6d9b55bf; }
+.fileNameColor28 .base { color: #c8902e; }
+.fileNameColor28 .dir { color: #c8902ebf; }
+.fileNameColor29 .base { color: #6f7fd6; }
+.fileNameColor29 .dir { color: #6f7fd6bf; }
 
 .badge {
   min-width: 2ch;

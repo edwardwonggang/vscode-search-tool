@@ -93,6 +93,7 @@
     txt: { label: 'T', color: '#9f9f9f' },
     log: { label: 'L', color: '#9f9f9f' }
   };
+  const fileNamePaletteSize = 30;
 
   if (typeof vscodeState.query === 'string') queryEl.value = vscodeState.query;
   if (typeof vscodeState.include === 'string') includeEl.value = vscodeState.include;
@@ -309,6 +310,10 @@
     return parts.length > 1 ? parts[parts.length - 1] : '';
   }
 
+  function getFileNamePaletteIndex(index) {
+    return index % fileNamePaletteSize;
+  }
+
   function renderResults(items) {
     if (!items.length) {
       resultsEl.innerHTML = `<div class="empty">${escapeHtml(t('empty_results'))}</div>`;
@@ -316,12 +321,13 @@
       return;
     }
 
-    resultsEl.innerHTML = items.map((file) => {
+    resultsEl.innerHTML = items.map((file, index) => {
       const parts = splitPath(file.relativePath);
       const collapsed = collapsedFiles.has(file.path);
       const chevron = collapsed
         ? (icons.chevronRight || '&#9656;')
         : (icons.chevronDown || '&#9662;');
+      const fileNameColorIndex = getFileNamePaletteIndex(index);
       const matches = file.matches.map((match) => {
         const payload = encodeURIComponent(JSON.stringify(match));
         return `<button class="match" type="button" data-match="${payload}">
@@ -333,7 +339,7 @@
         <button class="fileHeader" type="button" data-toggle-file="${encodeURIComponent(file.path)}">
           <span class="treeIcon" aria-hidden="true">${chevron}</span>
           ${getFileIconMarkup(file.relativePath)}
-          <span class="fileName">
+          <span class="fileName fileNameColor${fileNameColorIndex}">
             <span class="base">${escapeHtml(parts.name)}</span>
             <span class="dir">${escapeHtml(parts.dir)}</span>
           </span>
