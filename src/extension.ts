@@ -2,10 +2,11 @@ import * as vscode from 'vscode';
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import * as posixPath from 'path/posix';
-import { Client, ConnectConfig, ClientChannel, SFTPWrapper } from 'ssh2';
+import type { Client, ConnectConfig, ClientChannel, SFTPWrapper } from 'ssh2';
 
 type SearchOptions = {
   query: string;
+  fileQuery?: string;
   include: string;
   exclude: string;
   caseSensitive: boolean;
@@ -19,12 +20,15 @@ type SearchSettings = {
   remotePort: number;
   remoteUsername: string;
   remotePassword: string;
+  remoteSearchPath: string;
   includeGlobs: string[];
   excludeGlobs: string[];
 };
 
 type SearchMatch = {
   path: string;
+  uri?: string;
+  relativePath?: string;
   line: number;
   column: number;
   endColumn: number;
@@ -35,6 +39,13 @@ type SearchFileResult = {
   path: string;
   relativePath: string;
   matches: SearchMatch[];
+};
+
+type SearchTarget = {
+  uri: vscode.Uri;
+  uriString: string;
+  legacyPath: string;
+  relativePath: string;
 };
 
 type SearchStateMessage = {
@@ -48,6 +59,7 @@ type SearchStateMessage = {
 
 type SearchResultMessage = {
   type: 'results';
+  mode: 'content' | 'file';
   items: Array<{
     path: string;
     relativePath: string;
@@ -56,9 +68,15 @@ type SearchResultMessage = {
   }>;
 };
 
-type RemoteConnectionTestResult = {
+type RemoteConnectionResult = {
   ok: boolean;
   message: string;
+};
+
+type WorkspaceInfo = {
+  displayPath: string;
+  gitRootOk: boolean;
+  gitError?: string;
 };
 
 type TranslationRow = {
@@ -68,10 +86,14 @@ type TranslationRow = {
 };
 
 const SEARCH_SETTINGS_KEY = 'ripgrepTool.searchSettings';
+const LOG_FILE_NAME = 'ripgreptool.log';
+const MAX_LOG_FILE_BYTES = 1024 * 1024;
+const LOG_TRIM_TARGET_BYTES = 768 * 1024;
 const DEFAULT_REMOTE_PORT = 22;
-const DEFAULT_LOCAL_ROOT = 'x:/src';
-const DEFAULT_REMOTE_ROOT = '/home/wanggang/src';
+const REMOTE_HOME_ROOT = '/home';
 const DEFAULT_REMOTE_RG_PATH = '/tmp/ripgreptool-rg';
+const SSH_KEEPALIVE_INTERVAL_MS = 15000;
+const SSH_KEEPALIVE_COUNT_MAX = 3;
 const BUNDLED_REMOTE_RG_RELATIVE_PATH = path.join(
   'assets',
   'bin',
@@ -262,23 +284,38 @@ const DEFAULT_EXCLUDE_GLOBS = [
 
 class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'ripgrepTool.searchView';
+  private static readonly LOG_SNIPPET_MAX_CHARS = 500;
 
   private view?: vscode.WebviewView;
   private readonly outputChannel: vscode.OutputChannel;
+  private logWriteQueue: Promise<void> = Promise.resolve();
   private activeRemoteClient?: Client;
   private activeRemoteChannel?: ClientChannel;
+  private remoteConnectionPromise?: Promise<Client>;
+  private remoteConnectionSignature?: string;
+  private remoteRgReadySignature?: string;
   private searchToken = 0;
   private readonly resultCache = new Map<string, SearchFileResult>();
   private refreshTimer?: NodeJS.Timeout;
   private pendingResultPush = false;
-  private lastResults: SearchResultMessage = { type: 'results', items: [] };
+  private lastResults: SearchResultMessage = { type: 'results', mode: 'content', items: [] };
   private lastStateMessage: SearchStateMessage = { type: 'state', running: false, summary: '' };
+  private workspaceInfo?: WorkspaceInfo;
   private translationsCache?: Record<string, string>;
   private searchResultViewColumn?: vscode.ViewColumn;
+  private queuedOpenMatch?: SearchMatch;
+  private openingMatch = false;
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.outputChannel = vscode.window.createOutputChannel('Ripgrep Tool');
     this.context.subscriptions.push(this.outputChannel);
+    void this.getLogFilePath()
+      .then((logPath) => {
+        this.outputChannel.appendLine(`[${new Date().toISOString()}] [log-file] ${logPath}`);
+      })
+      .catch(() => {
+        // ignore log path init failure here; normal logging path will report errors later
+      });
   }
 
   public resolveWebviewView(webviewView: vscode.WebviewView): void {
@@ -288,26 +325,40 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
       localResourceRoots: [vscode.Uri.file(this.context.asAbsolutePath('media'))]
     };
 
-    void this.renderWebview(webviewView);
+    void this.renderWebview(webviewView).catch((error) => {
+      const message = error instanceof Error ? error.message : String(error);
+      this.log(`webview render failed: ${message}`);
+      webviewView.webview.html = this.renderFallbackHtml(`Failed to load Ripgrep Tool view: ${escapeHtml(message)}`);
+    });
     webviewView.webview.onDidReceiveMessage(async (message) => {
       switch (message.type) {
         case 'ready':
           await this.postBootstrap();
           break;
         case 'search':
-          await this.runSearch(message.payload as SearchOptions);
+          if (await this.ensureWorkspaceGitRootForFeature()) {
+            await this.runSearch(message.payload as SearchOptions);
+          }
           break;
         case 'rebuildTags':
-          await this.rebuildTags();
+          if (await this.ensureWorkspaceGitRootForFeature()) {
+            await this.rebuildTags();
+          }
           break;
         case 'open':
-          await this.openMatch(message.payload as SearchMatch);
+          if (await this.ensureWorkspaceGitRootForFeature()) {
+            this.enqueueOpenMatch(message.payload as SearchMatch);
+          }
           break;
         case 'saveSettings':
-          await this.saveSettings(message.payload as SearchSettings);
+          if (await this.ensureWorkspaceGitRootForFeature()) {
+            await this.saveSettings(message.payload as SearchSettings);
+          }
           break;
-        case 'testConnection':
-          await this.testConnection(message.payload as SearchSettings);
+        case 'connect':
+          if (await this.ensureWorkspaceGitRootForFeature()) {
+            await this.connectFromSettings(message.payload as SearchSettings);
+          }
           break;
         default:
           break;
@@ -318,6 +369,37 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
   public focus(): void {
     this.view?.show?.(true);
     this.view?.webview.postMessage({ type: 'focus' });
+  }
+
+  public async focusIfWorkspaceGitRoot(): Promise<void> {
+    if (!await this.ensureWorkspaceGitRootForFeature()) {
+      return;
+    }
+
+    this.focus();
+  }
+
+  public async openLogFileInEditor(): Promise<void> {
+    const logPath = await this.getLogFilePath();
+    await fs.mkdir(path.dirname(logPath), { recursive: true });
+    const fileHandle = await fs.open(logPath, 'a');
+    await fileHandle.close();
+    const document = await vscode.workspace.openTextDocument(vscode.Uri.file(logPath));
+    await vscode.window.showTextDocument(document, { preview: false });
+  }
+
+  public async revealLogFileInExplorer(): Promise<void> {
+    const logPath = await this.getLogFilePath();
+    await fs.mkdir(path.dirname(logPath), { recursive: true });
+    const fileHandle = await fs.open(logPath, 'a');
+    await fileHandle.close();
+    await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(logPath));
+  }
+
+  public dispose(): void {
+    this.searchToken += 1;
+    this.cancelActiveSearch();
+    this.closeRemoteConnection('provider disposed');
   }
 
   private async renderWebview(webviewView: vscode.WebviewView): Promise<void> {
@@ -345,12 +427,28 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
       .split('__ICON_URIS__').join(JSON.stringify(iconUris));
   }
 
+  private renderFallbackHtml(message: string): string {
+    return [
+      '<!DOCTYPE html>',
+      '<html lang="en">',
+      '<head><meta charset="UTF-8" /></head>',
+      '<body>',
+      `<p>${message}</p>`,
+      '</body>',
+      '</html>'
+    ].join('');
+  }
+
   private async postBootstrap(): Promise<void> {
     const workspaceName = vscode.workspace.workspaceFolders?.[0]?.name ?? 'No workspace';
+    const workspaceInfo = await this.getWorkspaceInfo();
     this.view?.webview.postMessage({
       type: 'bootstrap',
       payload: {
         workspaceName,
+        workspacePath: workspaceInfo.displayPath,
+        gitRootOk: workspaceInfo.gitRootOk,
+        gitError: workspaceInfo.gitError,
         settings: this.getSettings(),
         translations: await this.getTranslations(),
         state: this.lastStateMessage,
@@ -375,17 +473,77 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     return map;
   }
 
+  private async getWorkspaceInfo(): Promise<WorkspaceInfo> {
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    if (!workspaceFolder) {
+      return {
+        displayPath: await this.translate('workspace_none'),
+        gitRootOk: false,
+        gitError: await this.translate('git_root_required')
+      };
+    }
+
+    const displayPath = formatWorkspaceDisplayPath(workspaceFolder.uri);
+    const gitRootOk = await this.isWorkspaceGitRoot(workspaceFolder.uri);
+    const info: WorkspaceInfo = {
+      displayPath,
+      gitRootOk,
+      gitError: gitRootOk ? undefined : await this.translate('git_root_required')
+    };
+    this.workspaceInfo = info;
+    return info;
+  }
+
+  private async isWorkspaceGitRoot(workspaceUri: vscode.Uri): Promise<boolean> {
+    try {
+      const gitUri = vscode.Uri.joinPath(workspaceUri, '.git');
+      await vscode.workspace.fs.stat(gitUri);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async postGitRootRequired(workspaceInfo = this.workspaceInfo): Promise<void> {
+    const info = workspaceInfo ?? await this.getWorkspaceInfo();
+    const message = info.gitError || await this.translate('git_root_required');
+    this.cancelActiveSearch();
+    this.resultCache.clear();
+    this.lastResults = { type: 'results', mode: 'content', items: [] };
+    this.view?.webview.postMessage({ type: 'gitRootRequired', payload: { message, workspacePath: info.displayPath } });
+    this.postState({ type: 'state', running: false, error: message });
+  }
+
+  private async ensureWorkspaceGitRootForFeature(): Promise<boolean> {
+    const workspaceInfo = await this.getWorkspaceInfo();
+    if (workspaceInfo.gitRootOk) {
+      return true;
+    }
+
+    await this.postGitRootRequired(workspaceInfo);
+    return false;
+  }
+
   private async runSearch(options: SearchOptions): Promise<void> {
     const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
     if (!workspaceFolder) {
       this.postState({ type: 'state', running: false, error: 'Open a workspace folder first.' });
       return;
     }
+    const workspaceInfo = await this.getWorkspaceInfo();
+    if (!workspaceInfo.gitRootOk) {
+      await this.postGitRootRequired(workspaceInfo);
+      return;
+    }
 
+    const fileQuery = options.fileQuery?.trim() ?? '';
     const query = options.query.trim();
-    if (!query) {
+    if (!query && !fileQuery) {
+      const previousToken = this.searchToken;
+      this.searchToken += 1;
+      this.cancelActiveSearch(previousToken);
       this.resultCache.clear();
-      this.lastResults = { type: 'results', items: [] };
+      this.lastResults = { type: 'results', mode: 'content', items: [] };
       this.view?.webview.postMessage(this.lastResults);
       this.postState({ type: 'state', running: false, summary: '' });
       return;
@@ -401,12 +559,27 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    this.cancelActiveSearch();
+    const previousToken = this.searchToken;
+    const token = previousToken + 1;
+    this.searchToken = token;
+    this.cancelActiveSearch(previousToken);
     this.resultCache.clear();
-    this.lastResults = { type: 'results', items: [] };
+    this.lastResults = { type: 'results', mode: fileQuery ? 'file' : 'content', items: [] };
     this.view?.webview.postMessage(this.lastResults);
 
-    const token = ++this.searchToken;
+    let remoteCwd: string;
+    try {
+      remoteCwd = await this.resolveRemoteCwd(settings, workspaceFolder);
+      await this.ensureRemoteGitRoot(settings, remoteCwd, token);
+    } catch (error) {
+      this.postState({ type: 'state', running: false, error: error instanceof Error ? error.message : String(error) });
+      return;
+    }
+    if (fileQuery) {
+      await this.runFileSearch(token, fileQuery, options, settings, workspaceFolder, remoteCwd);
+      return;
+    }
+
     const config = vscode.workspace.getConfiguration('ripgrepTool');
     const maxResultsRaw = config.get<number>('maxResults', 0);
     const maxCountPerFile = maxResultsRaw <= 0 ? 0 : Math.max(1, Math.floor(maxResultsRaw));
@@ -415,7 +588,6 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     const threads = Math.max(0, config.get<number>('threads', 0));
     const args = this.buildArgs(options, settings, maxCountPerFile, contextLines, threads);
     const resultPathFilter = createResultPathFilter(options, settings);
-    const remoteCwd = this.mapWorkspacePath(workspaceFolder.uri.fsPath);
 
     if (options.definitionMode === true) {
       await this.runDefinitionSearch(token, options, workspaceFolder, remoteCwd, settings);
@@ -452,33 +624,38 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
 
       const data = entry.data;
       const filePath = data.path.text as string;
-      const absolutePath = path.join(workspaceFolder.uri.fsPath, filePath.replace(/\//g, path.sep));
-      const relativePath = vscode.workspace.asRelativePath(absolutePath, false);
+      const target = this.createWorkspaceTarget(workspaceFolder, filePath);
+      const relativePath = target.relativePath;
       if (!resultPathFilter(relativePath)) {
         return;
       }
       const submatches = data.submatches as Array<{ start: number; end: number }>;
       const lines = data.lines.text as string;
+      const lineText = lines.replace(/\r?\n$/, '');
       const lineNumber = data.line_number as number;
 
-      let bucket = this.resultCache.get(absolutePath);
+      let bucket = this.resultCache.get(target.uriString);
       if (!bucket) {
         bucket = {
-          path: absolutePath,
+          path: target.legacyPath,
           relativePath,
           matches: []
         };
-        this.resultCache.set(absolutePath, bucket);
+        this.resultCache.set(target.uriString, bucket);
       }
 
       for (const submatch of submatches) {
         totalMatches += 1;
+        const start = utf8ByteOffsetToUtf16Index(lineText, submatch.start);
+        const end = utf8ByteOffsetToUtf16Index(lineText, submatch.end);
         bucket.matches.push({
-          path: absolutePath,
+          path: target.legacyPath,
+          uri: target.uriString,
+          relativePath: target.relativePath,
           line: lineNumber,
-          column: submatch.start + 1,
-          endColumn: submatch.end + 1,
-          preview: lines.replace(/\r?\n$/, '')
+          column: start + 1,
+          endColumn: end + 1,
+          preview: lineText
         });
       }
 
@@ -531,7 +708,9 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.log(`search#${token} exception: ${message}`);
-      this.postState({ type: 'state', running: false, error: message });
+      if (token === this.searchToken) {
+        this.postState({ type: 'state', running: false, error: message });
+      }
     }
   }
 
@@ -545,12 +724,17 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     startedAt: number
   ): Promise<number | undefined> {
     const connectStartedAt = Date.now();
-    const client = await this.connectRemote(settings);
-    this.activeRemoteClient = client;
-    this.log(`search#${token} ssh connected (${Date.now() - connectStartedAt} ms)`);
+      const client = await this.getRemoteClient(settings);
+      if (token !== this.searchToken) {
+        return undefined;
+      }
+      this.log(`search#${token} ssh connected (${Date.now() - connectStartedAt} ms)`);
 
     const prepareStartedAt = Date.now();
     await this.uploadBundledRg(client, DEFAULT_REMOTE_RG_PATH);
+    if (token !== this.searchToken) {
+      return undefined;
+    }
     this.log(`search#${token} rg prepared (${Date.now() - prepareStartedAt} ms)`);
 
     const command = this.buildRemoteCommand(DEFAULT_REMOTE_RG_PATH, remoteCwd, args);
@@ -573,10 +757,8 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
           handlers.onStderr(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk);
         });
         stream.on('close', (code: number | undefined) => {
-          if (token === this.searchToken) {
+          if (this.activeRemoteChannel === stream) {
             this.activeRemoteChannel = undefined;
-            this.activeRemoteClient?.end();
-            this.activeRemoteClient = undefined;
           }
           resolve(code);
         });
@@ -585,6 +767,107 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
         });
       });
     });
+  }
+
+  private async runFileSearch(
+    token: number,
+    fileQuery: string,
+    options: SearchOptions,
+    settings: SearchSettings,
+    workspaceFolder: vscode.WorkspaceFolder,
+    remoteCwd: string
+  ): Promise<void> {
+    const startedAt = Date.now();
+    let stderr = '';
+    let totalFiles = 0;
+
+    this.log(`file-search#${token} start`);
+    this.log(`file-search#${token} query="${fileQuery}" cwd="${workspaceFolder.uri.fsPath}"`);
+    this.log(`file-search#${token} remote cwd="${remoteCwd}"`);
+    this.postState({ type: 'state', running: true, summary: 'Searching files...' });
+
+    try {
+      const client = await this.getRemoteClient(settings);
+      if (token !== this.searchToken) {
+        return;
+      }
+      this.log(`file-search#${token} ssh connected (${Date.now() - startedAt} ms)`);
+
+      await this.uploadBundledRg(client, DEFAULT_REMOTE_RG_PATH);
+      if (token !== this.searchToken) {
+        return;
+      }
+      this.log(`file-search#${token} rg prepared (${Date.now() - startedAt} ms)`);
+
+      const args = this.buildFileSearchArgs(options, settings);
+      const command = this.buildRemoteCommand(DEFAULT_REMOTE_RG_PATH, remoteCwd, args);
+      this.log(`file-search#${token} remote command=${command}`);
+
+      const result = await this.execRemoteCommandWithExitCode(client, command, true);
+      if (token !== this.searchToken) {
+        return;
+      }
+      stderr = result.stderr;
+
+      if (result.code !== 0 && result.code !== 1) {
+        this.log(`file-search#${token} failed code=${result.code ?? 'unknown'} stderr=${stderr.trim()}`);
+        this.postState({
+          type: 'state',
+          running: false,
+          error: stderr.trim() || `ripgrep exited with code ${result.code ?? 'unknown'}.`
+        });
+        return;
+      }
+
+      const resultPathFilter = createResultPathFilter(options, settings);
+      const matcher = createFileQueryMatcher(fileQuery, options.caseSensitive);
+      const lines = result.stdout
+        .split(/\r?\n/u)
+        .map((line) => line.trim())
+        .filter(Boolean);
+
+      this.resultCache.clear();
+      for (const remoteRelativePath of lines) {
+        const relativePath = remoteRelativePath.replace(/\\/gu, '/');
+        if (!resultPathFilter(relativePath) || !matcher(relativePath)) {
+          continue;
+        }
+        const target = this.createWorkspaceTarget(workspaceFolder, relativePath);
+        const displayPath = target.relativePath;
+        this.resultCache.set(target.uriString, {
+          path: target.legacyPath,
+          relativePath: displayPath,
+          matches: [{
+            path: target.legacyPath,
+            uri: target.uriString,
+            relativePath: target.relativePath,
+            line: 1,
+            column: 1,
+            endColumn: 2,
+            preview: displayPath
+          }]
+        });
+        totalFiles += 1;
+      }
+
+      this.pushResults('file');
+      const elapsedMs = Date.now() - startedAt;
+      this.log(`file-search#${token} done code=${result.code} total=${elapsedMs} ms, files=${totalFiles}`);
+      const summary = totalFiles === 0
+        ? `No files (${elapsedMs} ms)`
+        : `${totalFiles} files (${elapsedMs} ms)`;
+      this.postState({ type: 'state', running: false, summary, elapsedMs });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.log(`file-search#${token} exception: ${message}`);
+      if (token === this.searchToken) {
+        this.postState({ type: 'state', running: false, error: message });
+      }
+    } finally {
+      if (token === this.searchToken) {
+        this.activeRemoteChannel = undefined;
+      }
+    }
   }
 
   private buildArgs(
@@ -632,10 +915,43 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     return args;
   }
 
-  private pushResults(): void {
+  private buildFileSearchArgs(options: SearchOptions, settings: SearchSettings): string[] {
+    const args = ['--files', '--hidden'];
+    for (const glob of settings.includeGlobs) {
+      args.push('--glob', glob);
+    }
+    for (const glob of settings.excludeGlobs) {
+      args.push('--glob', `!${glob}`);
+    }
+    if (options.include.trim()) {
+      for (const glob of splitUserGlobs(options.include)) {
+        args.push('--glob', glob);
+      }
+    }
+    if (options.exclude.trim()) {
+      for (const glob of splitUserGlobs(options.exclude)) {
+        args.push('--glob', `!${glob}`);
+      }
+    }
+    return args;
+  }
+
+  private createWorkspaceTarget(workspaceFolder: vscode.WorkspaceFolder, remoteRelativePath: string): SearchTarget {
+    const relativePath = normalizeSearchPath(remoteRelativePath);
+    const uri = joinWorkspaceUri(workspaceFolder.uri, relativePath);
+    return {
+      uri,
+      uriString: uri.toString(),
+      legacyPath: uri.scheme === 'file' ? uri.fsPath : uri.toString(),
+      relativePath
+    };
+  }
+
+  private pushResults(mode: 'content' | 'file' = 'content'): void {
     this.pendingResultPush = false;
     this.lastResults = {
       type: 'results',
+      mode,
       items: Array.from(this.resultCache.values())
         .sort((left, right) => left.relativePath.localeCompare(right.relativePath))
         .map((file) => ({
@@ -673,34 +989,55 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async openMatch(match: SearchMatch): Promise<void> {
-    // Keep a single preview tab in one editor group and let VS Code replace it in place.
-    this.outputChannel.appendLine(`[Ripgrep] openMatch: rawPath="${match.path}", normalized="${path.normalize(match.path)}", line=${match.line}, preview="${match.preview}"`);
-    const nextUri = vscode.Uri.file(match.path);
-    this.invalidateSearchResultViewColumnIfEmpty();
+  private enqueueOpenMatch(match: SearchMatch): void {
+    this.queuedOpenMatch = match;
+    if (this.openingMatch) {
+      return;
+    }
+    void this.drainOpenMatchQueue();
+  }
 
+  private async drainOpenMatchQueue(): Promise<void> {
+    this.openingMatch = true;
     try {
-      this.outputChannel.appendLine(`[Ripgrep] Attempting to open document: ${nextUri.fsPath}`);
-      const document = await vscode.workspace.openTextDocument(nextUri);
-      this.outputChannel.appendLine(`[Ripgrep] opened document: ${document.uri.fsPath}, scheme: ${document.uri.scheme}`);
-      const showOptions: vscode.TextDocumentShowOptions = {
-        preview: true,
-        preserveFocus: false
-      };
-      if (this.searchResultViewColumn !== undefined) {
-        showOptions.viewColumn = this.searchResultViewColumn;
-        this.outputChannel.appendLine(`[Ripgrep] Using viewColumn: ${this.searchResultViewColumn}`);
+      while (this.queuedOpenMatch) {
+        const match = this.queuedOpenMatch;
+        this.queuedOpenMatch = undefined;
+        await this.openMatch(match);
       }
-      const editor = await vscode.window.showTextDocument(document, showOptions);
+    } finally {
+      this.openingMatch = false;
+      if (this.queuedOpenMatch) {
+        void this.drainOpenMatchQueue();
+      }
+    }
+  }
+
+  private async openMatch(match: SearchMatch): Promise<void> {
+    const nextUri = this.getMatchUri(match);
+    const selection = this.createMatchSelection(match);
+    const showOptions: vscode.TextDocumentShowOptions = {
+      preview: true,
+      preserveFocus: false,
+      selection
+    };
+    this.invalidateSearchResultViewColumnIfEmpty();
+    if (this.searchResultViewColumn !== undefined) {
+      showOptions.viewColumn = this.searchResultViewColumn;
+    }
+
+    const startedAt = Date.now();
+    this.debugLog(`open start uri=${nextUri.toString()} line=${match.line}`);
+    try {
+      const editor = await vscode.window.showTextDocument(nextUri, showOptions);
       this.searchResultViewColumn = editor.viewColumn;
-      this.updateEditorSelection(editor, match);
-      this.outputChannel.appendLine(`[Ripgrep] successfully opened match at line ${match.line}, editor viewColumn: ${editor.viewColumn}`);
+      editor.selection = selection;
+      editor.revealRange(selection, vscode.TextEditorRevealType.InCenter);
+      this.debugLog(`open done elapsed=${Date.now() - startedAt} ms uri=${nextUri.toString()}`);
     } catch (error) {
-      const errMsg = error instanceof Error ? error.message : String(error);
-      const errStack = error instanceof Error ? error.stack : 'No stack';
-      this.outputChannel.appendLine(`[Ripgrep] ERROR opening document: ${errMsg}`);
-      this.outputChannel.appendLine(`[Ripgrep] ERROR stack: ${errStack}`);
-      throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      this.log(`open failed uri=${nextUri.toString()} path=${match.path} error=${message}`);
+      void vscode.window.showWarningMessage(await this.formatTranslation('open_failed', { message }));
     }
   }
 
@@ -717,30 +1054,38 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
   }
 
   private updateEditorSelection(editor: vscode.TextEditor, match: SearchMatch): void {
+    const selection = this.createMatchSelection(match);
+    editor.selection = selection;
+    editor.revealRange(selection, vscode.TextEditorRevealType.InCenter);
+  }
+
+  private createMatchSelection(match: SearchMatch): vscode.Selection {
     const selection = new vscode.Selection(
       match.line - 1,
       match.column - 1,
       match.line - 1,
       Math.max(match.column, match.endColumn - 1)
     );
-    editor.selection = selection;
-    editor.revealRange(selection, vscode.TextEditorRevealType.InCenter);
+    return selection;
   }
 
-  private cancelActiveSearch(): void {
+  private getMatchUri(match: SearchMatch): vscode.Uri {
+    if (match.uri) {
+      return vscode.Uri.parse(match.uri, true);
+    }
+    return vscode.Uri.file(match.path);
+  }
+
+  private cancelActiveSearch(token: number = this.searchToken): void {
     if (this.refreshTimer) {
       clearTimeout(this.refreshTimer);
       this.refreshTimer = undefined;
     }
     this.pendingResultPush = false;
     if (this.activeRemoteChannel) {
-      this.log(`search#${this.searchToken} remote cancel requested`);
+      this.log(`search#${token} remote command cancel requested`);
       this.activeRemoteChannel.close();
       this.activeRemoteChannel = undefined;
-    }
-    if (this.activeRemoteClient) {
-      this.activeRemoteClient.end();
-      this.activeRemoteClient = undefined;
     }
   }
 
@@ -748,44 +1093,149 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     return Boolean(settings.remoteHost && settings.remoteUsername && settings.remotePassword);
   }
 
-  private mapWorkspacePath(localWorkspacePath: string): string {
-    const normalizedWorkspace = normalizeLocalPath(localWorkspacePath);
-    const normalizedLocalRoot = normalizeLocalPath(DEFAULT_LOCAL_ROOT);
-    if (!normalizedWorkspace.startsWith(normalizedLocalRoot)) {
-      throw new Error(`Workspace path "${localWorkspacePath}" is outside local root "${DEFAULT_LOCAL_ROOT}".`);
+  private async resolveRemoteCwd(settings: SearchSettings, workspaceFolder: vscode.WorkspaceFolder): Promise<string> {
+    const userConfiguredPath = settings.remoteSearchPath.trim();
+    if (userConfiguredPath) {
+      return normalizeRemotePath(userConfiguredPath);
     }
-    const relative = normalizedWorkspace.slice(normalizedLocalRoot.length).replace(/^\/+/, '');
-    return relative ? posixPath.join(DEFAULT_REMOTE_ROOT, relative) : DEFAULT_REMOTE_ROOT;
+    if (workspaceFolder.uri.scheme === 'vscode-remote' && workspaceFolder.uri.path) {
+      return normalizeRemotePath(workspaceFolder.uri.path);
+    }
+    if (vscode.env.remoteName && isPosixAbsolutePath(workspaceFolder.uri.fsPath)) {
+      return normalizeRemotePath(workspaceFolder.uri.fsPath);
+    }
+
+    const inferredPath = inferRemoteWorkspacePath(workspaceFolder.uri.fsPath, settings.remoteUsername);
+    if (inferredPath) {
+      return inferredPath;
+    }
+
+    throw new Error(await this.translate('err_remote_search_path_required'));
+  }
+
+  private async getRemoteClient(settings: SearchSettings): Promise<Client> {
+    const signature = this.getRemoteConnectionSignature(settings);
+    if (this.activeRemoteClient && this.remoteConnectionSignature === signature) {
+      return this.activeRemoteClient;
+    }
+    if (this.remoteConnectionPromise && this.remoteConnectionSignature === signature) {
+      return await this.remoteConnectionPromise;
+    }
+
+    this.closeRemoteConnection('ssh settings changed');
+    this.remoteConnectionSignature = signature;
+    const connectionPromise = this.connectRemote(settings)
+      .then((client) => {
+        if (this.remoteConnectionPromise !== connectionPromise || this.remoteConnectionSignature !== signature) {
+          client.end();
+          throw new Error('SSH connection was replaced.');
+        }
+        this.activeRemoteClient = client;
+        client.once('end', () => {
+          this.debugLog('ssh connection ended by remote');
+          this.clearRemoteConnection(client, signature);
+        });
+        client.once('close', () => {
+          this.debugLog('ssh connection closed');
+          this.clearRemoteConnection(client, signature);
+        });
+        client.on('error', (error) => {
+          this.debugLog(`ssh connection error: ${error.message}`);
+          this.clearRemoteConnection(client, signature);
+        });
+        return client;
+      })
+      .catch((error) => {
+        if (this.remoteConnectionPromise === connectionPromise) {
+          this.clearRemoteConnection();
+        }
+        throw error;
+      });
+    this.remoteConnectionPromise = connectionPromise;
+    return await connectionPromise;
+  }
+
+  private getRemoteConnectionSignature(settings: SearchSettings): string {
+    return JSON.stringify({
+      host: settings.remoteHost,
+      port: settings.remotePort,
+      username: settings.remoteUsername,
+      password: settings.remotePassword
+    });
+  }
+
+  private clearRemoteConnection(client?: Client, signature?: string): void {
+    if (signature && this.remoteConnectionSignature !== signature) {
+      return;
+    }
+    if (client && this.activeRemoteClient && this.activeRemoteClient !== client) {
+      return;
+    }
+    this.activeRemoteClient = undefined;
+    this.remoteConnectionPromise = undefined;
+    this.remoteConnectionSignature = undefined;
+    this.remoteRgReadySignature = undefined;
+  }
+
+  private closeRemoteConnection(reason: string): void {
+    const client = this.activeRemoteClient;
+    this.activeRemoteClient = undefined;
+    this.remoteConnectionPromise = undefined;
+    this.remoteConnectionSignature = undefined;
+    this.remoteRgReadySignature = undefined;
+    if (!client) {
+      return;
+    }
+    this.debugLog(`ssh connection closing: ${reason}`);
+    try {
+      client.end();
+    } catch {
+      // ignore close failures
+    }
   }
 
   private async connectRemote(settings: SearchSettings): Promise<Client> {
+    this.debugLog(
+      `ssh connect start host=${settings.remoteHost || '<empty>'}:${settings.remotePort} user=${settings.remoteUsername || '<empty>'}`
+    );
+    const startedAt = Date.now();
+    const ssh2 = await import('ssh2');
     const connectConfig: ConnectConfig = {
       host: settings.remoteHost,
       port: settings.remotePort,
       username: settings.remoteUsername,
       password: settings.remotePassword,
-      readyTimeout: 20000
+      readyTimeout: 20000,
+      keepaliveInterval: SSH_KEEPALIVE_INTERVAL_MS,
+      keepaliveCountMax: SSH_KEEPALIVE_COUNT_MAX
     };
 
     return await new Promise<Client>((resolve, reject) => {
-      const client = new Client();
-      client.on('ready', () => resolve(client));
-      client.on('error', (error) => reject(error));
+      const client = new ssh2.Client();
+      client.on('ready', () => {
+        this.debugLog(`ssh connect ready (${Date.now() - startedAt} ms)`);
+        resolve(client);
+      });
+      client.on('error', (error) => {
+        this.debugLog(`ssh connect error: ${error.message}`);
+        reject(error);
+      });
       client.connect(connectConfig);
     });
   }
 
   private async uploadBundledRg(client: Client, remoteRgPath: string): Promise<void> {
+    const signature = this.remoteConnectionSignature;
     const localRgPath = this.context.asAbsolutePath(BUNDLED_REMOTE_RG_RELATIVE_PATH);
-    this.log(`checking bundled rg at ${localRgPath}`);
-    await fs.access(localRgPath);
-    this.log(`checking remote rg version at ${remoteRgPath}`);
-    const remoteVersion = await this.getRemoteRgVersion(client, remoteRgPath);
-    this.log(`remote rg version result: ${remoteVersion ?? 'missing'}`);
-    if (remoteVersion?.startsWith('ripgrep 14.1.0')) {
-      this.log(`remote rg already ready at ${remoteRgPath}`);
+    const localRgStat = await fs.stat(localRgPath);
+    const bundledSignature = `${remoteRgPath}|${localRgStat.size}|${localRgStat.mtimeMs}`;
+    const readySignature = signature ? `${signature}|${bundledSignature}` : undefined;
+    if (readySignature && this.remoteRgReadySignature === readySignature) {
+      this.debugLog(`remote rg readiness cache hit at ${remoteRgPath}`);
       return;
     }
+
+    this.log(`checking bundled rg at ${localRgPath}`);
     this.log(`creating remote directory for rg: ${posixPath.dirname(remoteRgPath)}`);
     await this.execRemoteCommand(client, `mkdir -p ${shellEscape(posixPath.dirname(remoteRgPath))}`);
     this.log('opening sftp session');
@@ -803,34 +1253,8 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     sftp.end();
     this.log('setting executable bit on remote rg');
     await this.execRemoteCommand(client, `chmod +x ${shellEscape(remoteRgPath)}`);
-  }
-
-  private async getRemoteRgVersion(client: Client, remoteRgPath: string): Promise<string | undefined> {
-    try {
-      return await new Promise<string | undefined>((resolve, reject) => {
-        client.exec(`${shellEscape(remoteRgPath)} --version`, (error, stream) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-          let stdout = '';
-          stream.on('data', (chunk: Buffer | string) => {
-            stdout += Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk;
-          });
-          stream.stderr.on('data', () => {
-            // Drain stderr to avoid channel stalls.
-          });
-          stream.on('close', (code: number | undefined) => {
-            if (code === 0 || code === undefined) {
-              resolve(stdout.split(/\r?\n/)[0]?.trim() || undefined);
-              return;
-            }
-            resolve(undefined);
-          });
-        });
-      });
-    } catch {
-      return undefined;
+    if (readySignature) {
+      this.remoteRgReadySignature = readySignature;
     }
   }
 
@@ -854,9 +1278,12 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     client: Client,
     command: string
   ): Promise<{ stdout: string; stderr: string; code: number | undefined }> {
+    this.debugLog(`remote exec start: ${command}`);
+    const startedAt = Date.now();
     return await new Promise<{ stdout: string; stderr: string; code: number | undefined }>((resolve, reject) => {
       client.exec(command, (error, stream) => {
         if (error) {
+          this.debugLog(`remote exec spawn error: ${error.message}`);
           reject(error);
           return;
         }
@@ -869,6 +1296,9 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
           stderr += Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk;
         });
         stream.on('close', (code: number | undefined) => {
+          this.debugLog(
+            `remote exec done code=${code ?? 'unknown'} elapsed=${Date.now() - startedAt} ms stdout="${this.summarizeLogText(stdout)}" stderr="${this.summarizeLogText(stderr)}"`
+          );
           if (code === 0 || code === undefined) {
             resolve({ stdout, stderr, code });
             return;
@@ -899,29 +1329,30 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     return normalizeSettings(saved);
   }
 
-  private async testConnection(payload: SearchSettings): Promise<void> {
+  private async connectFromSettings(payload: SearchSettings): Promise<void> {
     const settings = normalizeSettings(payload);
     this.log(
-      `connection-test payload host=${settings.remoteHost || '<empty>'}:${settings.remotePort} user=${settings.remoteUsername || '<empty>'} passwordPresent=${settings.remotePassword ? 'true' : 'false'}`
+      `connection payload host=${settings.remoteHost || '<empty>'}:${settings.remotePort} user=${settings.remoteUsername || '<empty>'} passwordPresent=${settings.remotePassword ? 'true' : 'false'}`
     );
     if (!this.shouldUseRemoteSearch(settings)) {
-      this.postConnectionTest({ ok: false, message: 'Host, username, and password are required.' });
+      this.postConnectionResult({ ok: false, message: await this.translate('connection_required') });
       return;
     }
 
     const startedAt = Date.now();
     try {
-      const client = await this.connectRemote(settings);
-      const result = await this.execRemoteCommandWithOutput(client, 'pwd');
-      client.end();
+      const reused = Boolean(this.activeRemoteClient && this.remoteConnectionSignature === this.getRemoteConnectionSignature(settings));
+      const client = await this.getRemoteClient(settings);
       const elapsedMs = Date.now() - startedAt;
-      const pwd = result.stdout.split(/\r?\n/)[0]?.trim() || '';
-      this.log(`connection-test ok (${elapsedMs} ms) pwd=${pwd}`);
-      this.postConnectionTest({ ok: true, message: `Connected in ${elapsedMs} ms${pwd ? `, pwd: ${pwd}` : ''}` });
+      this.log(`connect ok (${elapsedMs} ms) reused=${reused ? 'true' : 'false'} clientReady=${client ? 'true' : 'false'}`);
+      this.postConnectionResult({
+        ok: true,
+        message: await this.formatTranslation(reused ? 'connection_reused' : 'connection_ready', { elapsedMs })
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.log(`connection-test failed: ${message}`);
-      this.postConnectionTest({ ok: false, message });
+      this.log(`connection failed: ${message}`);
+      this.postConnectionResult({ ok: false, message });
     }
   }
 
@@ -930,12 +1361,80 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     this.view?.webview.postMessage(message);
   }
 
-  private postConnectionTest(result: RemoteConnectionTestResult): void {
-    this.view?.webview.postMessage({ type: 'connectionTest', payload: result });
+  private postConnectionResult(result: RemoteConnectionResult): void {
+    this.view?.webview.postMessage({ type: 'connectionResult', payload: result });
   }
 
   private log(message: string): void {
-    this.outputChannel.appendLine(`[${new Date().toISOString()}] ${message}`);
+    const line = `[${new Date().toISOString()}] ${message}`;
+    this.outputChannel.appendLine(line);
+    this.enqueueLogWrite(`${line}\n`);
+  }
+
+  private enqueueLogWrite(text: string): void {
+    this.logWriteQueue = this.logWriteQueue
+      .then(async () => {
+        const logPath = await this.getLogFilePath();
+        await fs.mkdir(path.dirname(logPath), { recursive: true });
+        await fs.appendFile(logPath, text, 'utf8');
+        await this.trimLogFileIfNeeded(logPath);
+      })
+      .catch((error) => {
+        this.outputChannel.appendLine(
+          `[${new Date().toISOString()}] [log-file-error] ${error instanceof Error ? error.message : String(error)}`
+        );
+      });
+  }
+
+  private async getLogFilePath(): Promise<string> {
+    const storageUri = this.context.globalStorageUri;
+    const storagePath = storageUri.scheme === 'file' ? storageUri.fsPath : this.context.globalStoragePath;
+    return path.join(storagePath, LOG_FILE_NAME);
+  }
+
+  private async trimLogFileIfNeeded(logPath: string): Promise<void> {
+    const stat = await fs.stat(logPath).catch(() => undefined);
+    if (!stat || stat.size <= MAX_LOG_FILE_BYTES) {
+      return;
+    }
+
+    const handle = await fs.open(logPath, 'r');
+    try {
+      const start = Math.max(0, stat.size - LOG_TRIM_TARGET_BYTES);
+      const length = stat.size - start;
+      const buffer = Buffer.alloc(length);
+      await handle.read(buffer, 0, length, start);
+      let text = buffer.toString('utf8');
+      const firstNewline = text.indexOf('\n');
+      if (firstNewline >= 0 && start > 0) {
+        text = text.slice(firstNewline + 1);
+      }
+      await fs.writeFile(logPath, text, 'utf8');
+    } finally {
+      await handle.close();
+    }
+  }
+
+  private debugLog(message: string): void {
+    if (!this.isVerboseLoggingEnabled()) {
+      return;
+    }
+    this.log(`[verbose] ${message}`);
+  }
+
+  private isVerboseLoggingEnabled(): boolean {
+    return vscode.workspace.getConfiguration('ripgrepTool').get<boolean>('verboseLogging', true);
+  }
+
+  private summarizeLogText(text: string): string {
+    const normalized = text.replace(/\s+/g, ' ').trim();
+    if (!normalized) {
+      return '';
+    }
+    if (normalized.length <= RipgrepSearchViewProvider.LOG_SNIPPET_MAX_CHARS) {
+      return normalized;
+    }
+    return `${normalized.slice(0, RipgrepSearchViewProvider.LOG_SNIPPET_MAX_CHARS)}...`;
   }
 
   private async translate(key: string): Promise<string> {
@@ -943,14 +1442,25 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     return map[key] || key;
   }
 
-  private mapRemoteToLocalRemote(remotePosix: string): string {
-    const norm = remotePosix.replace(/\\/g, '/').replace(/\/+$/u, '');
-    const base = DEFAULT_REMOTE_ROOT.replace(/\/+$/u, '');
-    if (!norm.toLowerCase().startsWith(base.toLowerCase())) {
-      throw new Error(`Remote path is outside the mapped server root.`);
+  private async formatTranslation(key: string, values: Record<string, string | number>): Promise<string> {
+    let text = await this.translate(key);
+    for (const [name, value] of Object.entries(values)) {
+      text = text.split(`{${name}}`).join(String(value));
     }
-    const rel = norm.slice(base.length).replace(/^\/+/u, '');
-    return path.join(DEFAULT_LOCAL_ROOT, rel.replace(/\//gu, path.sep));
+    return text;
+  }
+
+  private createTargetFromRemotePath(
+    workspaceFolder: vscode.WorkspaceFolder,
+    remoteFileAbs: string,
+    remoteCwd: string
+  ): SearchTarget {
+    const relativePath = getRelativeRemotePath(remoteFileAbs, remoteCwd);
+    if (relativePath !== undefined) {
+      return this.createWorkspaceTarget(workspaceFolder, relativePath);
+    }
+
+    throw new Error(`Remote path is outside the workspace root.`);
   }
 
   private async getRemoteGitTop(client: Client, remoteCwd: string, token: number): Promise<string> {
@@ -979,6 +1489,22 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     return top;
   }
 
+  private async ensureRemoteGitRoot(settings: SearchSettings, remoteCwd: string, token: number): Promise<void> {
+    const client = await this.getRemoteClient(settings);
+    if (token !== this.searchToken) {
+      return;
+    }
+    const cmd = `cd ${shellEscape(remoteCwd)} && git rev-parse --show-toplevel`;
+    const r = await this.execRemoteCommandWithExitCode(client, cmd);
+    if (token !== this.searchToken) {
+      return;
+    }
+    const top = r.stdout.split(/\r?\n/u)[0]?.trim() ?? '';
+    if (r.code != null && r.code !== 0 || !top || normalizeRemotePath(top) !== normalizeRemotePath(remoteCwd)) {
+      throw new Error(await this.translate('git_root_required'));
+    }
+  }
+
   private async remoteFileExists(client: Client, remotePath: string): Promise<boolean> {
     const r = await this.execRemoteCommandWithExitCode(
       client,
@@ -989,13 +1515,20 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
 
   private async execRemoteCommandWithExitCode(
     client: Client,
-    command: string
+    command: string,
+    trackAsActive = false
   ): Promise<{ stdout: string; stderr: string; code: number | undefined }> {
+    this.debugLog(`remote exec(exitcode) start: ${command}`);
+    const startedAt = Date.now();
     return await new Promise((resolve, reject) => {
       client.exec(command, (error, stream) => {
         if (error) {
+          this.debugLog(`remote exec(exitcode) spawn error: ${error.message}`);
           reject(error);
           return;
+        }
+        if (trackAsActive) {
+          this.activeRemoteChannel = stream;
         }
         let stdout = '';
         let stderr = '';
@@ -1006,9 +1539,18 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
           stderr += Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk;
         });
         stream.on('close', (code: number | undefined | null) => {
+          if (trackAsActive && this.activeRemoteChannel === stream) {
+            this.activeRemoteChannel = undefined;
+          }
+          this.debugLog(
+            `remote exec(exitcode) done code=${code ?? 'unknown'} elapsed=${Date.now() - startedAt} ms stdout="${this.summarizeLogText(stdout)}" stderr="${this.summarizeLogText(stderr)}"`
+          );
           resolve({ stdout, stderr, code: code == null ? undefined : code });
         });
         stream.on('error', (streamError: Error) => {
+          if (trackAsActive && this.activeRemoteChannel === stream) {
+            this.activeRemoteChannel = undefined;
+          }
           reject(streamError);
         });
       });
@@ -1122,7 +1664,7 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
             type: 'state',
             running: true,
             ctagsInProgress: true,
-            summary: tail.trim() ? `${buildSummary} — ${tail.trim()}` : buildSummary
+            summary: tail.trim() ? `${buildSummary} - ${tail.trim()}` : buildSummary
           });
         };
         stream.on('data', (c: Buffer | string) => {
@@ -1132,12 +1674,15 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
           pushChunk(Buffer.isBuffer(c) ? c.toString('utf8') : c);
         });
         stream.on('close', (c: number | undefined) => {
-          if (token === this.searchToken) {
+          if (this.activeRemoteChannel === stream) {
             this.activeRemoteChannel = undefined;
           }
           resolve({ code: c, logText: acc });
         });
         stream.on('error', (e: Error) => {
+          if (this.activeRemoteChannel === stream) {
+            this.activeRemoteChannel = undefined;
+          }
           reject(e);
         });
       });
@@ -1147,29 +1692,29 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
   private parseTagResultLine(
     line: string,
     query: string,
-    workspaceRoot: string,
+    workspaceFolder: vscode.WorkspaceFolder,
+    remoteCwd: string,
     tagsBaseRemote: string
   ): SearchMatch | null {
-    this.outputChannel.appendLine(`[Ripgrep] parseTagResultLine: query="${query}", line="${line.substring(0, 80)}..."`);
+    this.debugLog(`parseTagResultLine query="${query}" line="${line.substring(0, 80)}..."`);
     const firstTab = line.indexOf('\t');
     if (firstTab <= 0) {
-      this.outputChannel.appendLine('[Ripgrep] parseTagResultLine: no first tab, returning null');
+      this.debugLog('parseTagResultLine skipped: no first tab');
       return null;
     }
     const name = line.slice(0, firstTab);
     if (name !== query) {
-      this.outputChannel.appendLine(`[Ripgrep] parseTagResultLine: name="${name}" != query="${query}", returning null`);
+      this.debugLog(`parseTagResultLine skipped: name="${name}"`);
       return null;
     }
     const rest = line.slice(firstTab + 1);
     const secondTab = rest.indexOf('\t');
     if (secondTab <= 0) {
-      this.outputChannel.appendLine('[Ripgrep] parseTagResultLine: no second tab, returning null');
+      this.debugLog('parseTagResultLine skipped: no second tab');
       return null;
     }
     const fileRel = rest.slice(0, secondTab);
     const after = rest.slice(secondTab + 1);
-    this.outputChannel.appendLine(`[Ripgrep] parseTagResultLine: fileRel="${fileRel}", after="${after.substring(0, 40)}..."`);
     const lineNumMatch = /line:(\d+)/u.exec(after);
     const lineNo = lineNumMatch ? Number.parseInt(lineNumMatch[1] ?? '1', 10) : 1;
     const semi = after.indexOf(';"');
@@ -1181,26 +1726,22 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     const remoteFileAbs = fileRel.startsWith('/')
       ? fileRel
       : posixPath.resolve(tagsBaseRemote, fileRel);
-    this.outputChannel.appendLine(`[Ripgrep] parseTagResultLine: remoteFileAbs="${remoteFileAbs}"`);
-    let localPath: string;
+    let target: SearchTarget;
     try {
-      localPath = this.mapRemoteToLocalRemote(remoteFileAbs);
-      this.outputChannel.appendLine(`[Ripgrep] parseTagResultLine: mapped to localPath="${localPath}"`);
+      target = this.createTargetFromRemotePath(workspaceFolder, remoteFileAbs, remoteCwd);
     } catch (error) {
-      const errMsg = error instanceof Error ? error.message : String(error);
-      this.outputChannel.appendLine(`[Ripgrep] parseTagResultLine: mapRemoteToLocalRemote failed: ${errMsg}`);
-      // Fallback: try using workspace root (handles cases where mapRemoteToLocalRemote fails)
-      localPath = path.join(workspaceRoot, fileRel.split('/').join(path.sep));
-      this.outputChannel.appendLine(`[Ripgrep] parseTagResultLine: fallback localPath="${localPath}"`);
+      this.debugLog(`parseTagResultLine skipped: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
     }
     const result = {
-      path: localPath,
+      path: target.legacyPath,
+      uri: target.uriString,
+      relativePath: target.relativePath,
       line: lineNo,
       column: 1,
       endColumn: 2,
       preview: preview || name
     };
-    this.outputChannel.appendLine(`[Ripgrep] parseTagResultLine: returning path="${localPath}"`);
     return result;
   }
 
@@ -1221,12 +1762,16 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
       ctagsInProgress: false
     });
 
-    let client: Client | undefined;
     try {
-      client = await this.connectRemote(settings);
-      this.activeRemoteClient = client;
+      const client = await this.getRemoteClient(settings);
+      if (token !== this.searchToken) {
+        return;
+      }
       this.log(`def-search#${token} ssh connected`);
       await this.uploadBundledRg(client, DEFAULT_REMOTE_RG_PATH);
+      if (token !== this.searchToken) {
+        return;
+      }
       const ctagsPath = await this.ensureRemoteCtags(client);
       this.log(`def-search#${token} ctags at ${ctagsPath}`);
 
@@ -1274,22 +1819,23 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
         if (token !== this.searchToken) {
           return;
         }
-        const m = this.parseTagResultLine(line, query, workspaceFolder.uri.fsPath, tagsDir);
+        const m = this.parseTagResultLine(line, query, workspaceFolder, remoteCwd, tagsDir);
         if (!m) {
           continue;
         }
-        const relativePath = vscode.workspace.asRelativePath(m.path, false);
+        const relativePath = m.relativePath ?? vscode.workspace.asRelativePath(m.path, false);
         if (!definitionPathFilter(relativePath)) {
           continue;
         }
-        let bucket = this.resultCache.get(m.path);
+        const cacheKey = m.uri ?? m.path;
+        let bucket = this.resultCache.get(cacheKey);
         if (!bucket) {
           bucket = {
             path: m.path,
             relativePath,
             matches: [] as SearchMatch[]
           };
-          this.resultCache.set(m.path, bucket);
+          this.resultCache.set(cacheKey, bucket);
         }
         bucket.matches.push(m);
       }
@@ -1306,16 +1852,9 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.log(`def-search#${token} error: ${message}`);
-      this.postState({ type: 'state', running: false, error: message, ctagsInProgress: false });
-    } finally {
-      if (client) {
-        try {
-          client.end();
-        } catch {
-          // ignore
-        }
+      if (token === this.searchToken) {
+        this.postState({ type: 'state', running: false, error: message, ctagsInProgress: false });
       }
-      this.activeRemoteClient = undefined;
     }
   }
 
@@ -1334,15 +1873,27 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
       });
       return;
     }
-    this.cancelActiveSearch();
-    const token = ++this.searchToken;
-    const remoteCwd = this.mapWorkspacePath(workspaceFolder.uri.fsPath);
-    this.postState({ type: 'state', running: true, summary: await this.translate('rebuild_tags_start'), ctagsInProgress: false });
-    let client: Client | undefined;
+    const previousToken = this.searchToken;
+    const token = previousToken + 1;
+    this.searchToken = token;
+    this.cancelActiveSearch(previousToken);
+    let remoteCwd: string;
     try {
-      client = await this.connectRemote(settings);
-      this.activeRemoteClient = client;
+      remoteCwd = await this.resolveRemoteCwd(settings, workspaceFolder);
+    } catch (error) {
+      this.postState({ type: 'state', running: false, error: error instanceof Error ? error.message : String(error) });
+      return;
+    }
+    this.postState({ type: 'state', running: true, summary: await this.translate('rebuild_tags_start'), ctagsInProgress: false });
+    try {
+      const client = await this.getRemoteClient(settings);
+      if (token !== this.searchToken) {
+        return;
+      }
       await this.uploadBundledRg(client, DEFAULT_REMOTE_RG_PATH);
+      if (token !== this.searchToken) {
+        return;
+      }
       const ctagsPath = await this.ensureRemoteCtags(client);
       const gitTop = await this.getRemoteGitTop(client, remoteCwd, token);
       if (token !== this.searchToken) {
@@ -1364,16 +1915,9 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.postState({ type: 'state', running: false, error: message, ctagsInProgress: false });
-    } finally {
-      if (client) {
-        try {
-          client.end();
-        } catch {
-          // ignore
-        }
+      if (token === this.searchToken) {
+        this.postState({ type: 'state', running: false, error: message, ctagsInProgress: false });
       }
-      this.activeRemoteClient = undefined;
     }
   }
 }
@@ -1404,6 +1948,7 @@ class JsonLineBuffer {
 export function activate(context: vscode.ExtensionContext): void {
   const provider = new RipgrepSearchViewProvider(context);
   context.subscriptions.push(
+    provider,
     vscode.window.registerWebviewViewProvider(RipgrepSearchViewProvider.viewType, provider, {
       webviewOptions: {
         retainContextWhenHidden: true
@@ -1411,7 +1956,23 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand('ripgrepTool.focusSearch', async () => {
       await vscode.commands.executeCommand('workbench.view.extension.ripgrepTool');
-      provider.focus();
+      await provider.focusIfWorkspaceGitRoot();
+    }),
+    vscode.commands.registerCommand('ripgrepTool.openLogFile', async () => {
+      try {
+        await provider.openLogFileInEditor();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        void vscode.window.showErrorMessage(`Failed to open log file: ${message}`);
+      }
+    }),
+    vscode.commands.registerCommand('ripgrepTool.revealLogFile', async () => {
+      try {
+        await provider.revealLogFileInExplorer();
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        void vscode.window.showErrorMessage(`Failed to reveal log file: ${message}`);
+      }
     })
   );
 }
@@ -1424,6 +1985,7 @@ function normalizeSettings(value?: SearchSettings): SearchSettings {
   const remotePort = Number.isFinite(remotePortValue) && remotePortValue > 0 ? remotePortValue : DEFAULT_REMOTE_PORT;
   const remoteUsername = String(value?.remoteUsername ?? '').trim();
   const remotePassword = String(value?.remotePassword ?? '');
+  const remoteSearchPath = String(value?.remoteSearchPath ?? '').trim();
   const includeGlobs = Array.isArray(value?.includeGlobs) ? value.includeGlobs : DEFAULT_INCLUDE_GLOBS;
   const excludeGlobs = Array.isArray(value?.excludeGlobs) ? value.excludeGlobs : DEFAULT_EXCLUDE_GLOBS;
 
@@ -1432,6 +1994,7 @@ function normalizeSettings(value?: SearchSettings): SearchSettings {
     remotePort,
     remoteUsername,
     remotePassword,
+    remoteSearchPath,
     includeGlobs: normalizeGlobList(includeGlobs, DEFAULT_INCLUDE_GLOBS),
     excludeGlobs: normalizeGlobList(excludeGlobs, DEFAULT_EXCLUDE_GLOBS)
   };
@@ -1475,6 +2038,21 @@ function createResultPathFilter(
   };
 }
 
+function createFileQueryMatcher(query: string, caseSensitive: boolean): (relativePath: string) => boolean {
+  const normalizedQuery = normalizeSearchPath(query);
+  if (!normalizedQuery) {
+    return () => true;
+  }
+
+  const needle = caseSensitive ? normalizedQuery : normalizedQuery.toLowerCase();
+  return (relativePath: string): boolean => {
+    const normalizedPath = normalizeSearchPath(relativePath);
+    const haystack = caseSensitive ? normalizedPath : normalizedPath.toLowerCase();
+    const baseName = haystack.slice(haystack.lastIndexOf('/') + 1);
+    return haystack.includes(needle) || baseName.includes(needle);
+  };
+}
+
 function matchSearchGlob(relativePath: string, glob: string): boolean {
   const normalizedPath = normalizeSearchPath(relativePath);
   const normalizedGlob = normalizeSearchPath(glob);
@@ -1502,6 +2080,94 @@ function normalizeSearchPath(value: string): string {
     .replace(/^\/+/, '')
     .replace(/\/+/g, '/')
     .replace(/\/$/, '');
+}
+
+function inferRemoteWorkspacePath(localWorkspacePath: string, remoteUsername: string): string | undefined {
+  return inferRemotePathFromUnc(localWorkspacePath) ?? inferRemotePathFromDrive(localWorkspacePath, remoteUsername);
+}
+
+function inferRemotePathFromUnc(localWorkspacePath: string): string | undefined {
+  const normalized = String(localWorkspacePath).trim().replace(/\\/gu, '/');
+  if (!normalized.startsWith('//')) {
+    return undefined;
+  }
+
+  const parts = normalized.replace(/^\/+/u, '').split('/').filter(Boolean);
+  if (parts.length < 2) {
+    return undefined;
+  }
+
+  const shareName = parts[1] ?? '';
+  return buildRemoteHomePath(shareName, parts.slice(2).join('/'));
+}
+
+function inferRemotePathFromDrive(localWorkspacePath: string, remoteUsername: string): string | undefined {
+  const match = /^([a-zA-Z]):[\\/]*(.*)$/u.exec(String(localWorkspacePath).trim());
+  if (!match) {
+    return undefined;
+  }
+
+  return buildRemoteHomePath(remoteUsername, match[2] ?? '');
+}
+
+function buildRemoteHomePath(userName: string, relativePath: string): string | undefined {
+  const normalizedUserName = normalizeSearchPath(userName);
+  if (!normalizedUserName || normalizedUserName.includes('/')) {
+    return undefined;
+  }
+
+  const homePath = posixPath.join(REMOTE_HOME_ROOT, normalizedUserName);
+  const normalizedRelativePath = normalizeSearchPath(relativePath);
+  return normalizedRelativePath ? posixPath.join(homePath, normalizedRelativePath) : homePath;
+}
+
+function formatWorkspaceDisplayPath(uri: vscode.Uri): string {
+  if (uri.scheme === 'file') {
+    return uri.fsPath;
+  }
+  if ((uri.scheme === 'vscode-remote' || vscode.env.remoteName) && uri.path) {
+    return uri.path;
+  }
+  return uri.toString();
+}
+
+function joinWorkspaceUri(workspaceUri: vscode.Uri, relativePath: string): vscode.Uri {
+  const normalizedRelativePath = normalizeSearchPath(relativePath);
+  if (workspaceUri.scheme === 'file') {
+    return vscode.Uri.file(path.join(workspaceUri.fsPath, normalizedRelativePath.replace(/\//gu, path.sep)));
+  }
+
+  const workspacePath = workspaceUri.path.replace(/\/+$/u, '');
+  return workspaceUri.with({
+    path: normalizedRelativePath ? `${workspacePath}/${normalizedRelativePath}` : workspacePath
+  });
+}
+
+function getRelativeRemotePath(remotePath: string, remoteBase: string): string | undefined {
+  const normalizedPath = normalizeRemotePath(remotePath);
+  const normalizedBase = normalizeRemotePath(remoteBase);
+  if (!normalizedPath || !normalizedBase) {
+    return undefined;
+  }
+  if (normalizedPath === normalizedBase) {
+    return '';
+  }
+  if (!normalizedPath.startsWith(`${normalizedBase}/`)) {
+    return undefined;
+  }
+  return normalizedPath.slice(normalizedBase.length + 1);
+}
+
+function normalizeRemotePath(value: string): string {
+  return String(value)
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/\/+/g, '/')
+    .replace(/\/$/u, '');
+}
+
+function isPosixAbsolutePath(value: string): boolean {
+  return value.replace(/\\/g, '/').startsWith('/');
 }
 
 function globSegmentToRegex(glob: string): RegExp {
@@ -1608,6 +2274,41 @@ function parseCsvLine(line: string): string[] {
 
   result.push(current);
   return result;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/gu, '&amp;')
+    .replace(/</gu, '&lt;')
+    .replace(/>/gu, '&gt;')
+    .replace(/"/gu, '&quot;')
+    .replace(/'/gu, '&#39;');
+}
+
+function utf8ByteOffsetToUtf16Index(text: string, byteOffset: number): number {
+  if (byteOffset <= 0) {
+    return 0;
+  }
+
+  let utf8Bytes = 0;
+  let utf16Index = 0;
+  while (utf16Index < text.length && utf8Bytes < byteOffset) {
+    const codePoint = text.codePointAt(utf16Index);
+    if (codePoint === undefined) {
+      break;
+    }
+
+    const char = String.fromCodePoint(codePoint);
+    const charBytes = Buffer.byteLength(char, 'utf8');
+    if (utf8Bytes + charBytes > byteOffset) {
+      return utf16Index;
+    }
+
+    utf8Bytes += charBytes;
+    utf16Index += char.length;
+  }
+
+  return utf16Index;
 }
 
 function buildIconUris(context: vscode.ExtensionContext, webview: vscode.Webview): Record<string, unknown> {

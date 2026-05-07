@@ -13,13 +13,23 @@ host_label,Host,主机
 port_label,Port,端口
 username_label,Username,用户名
 password_label,Password,密码
+remote_search_path_label,Remote Search Path (optional),远端搜索路径（可选）
+remote_search_path_placeholder,/home/wanggang/src/dmu/hvli/trunk,/home/wanggang/src/dmu/hvli/trunk
 filters_section_title,Filters,过滤
 include_globs_label,"Included file globs, one per line","包含文件 glob，每行一个"
 exclude_globs_label,"Excluded globs, one per line","排除 glob，每行一个"
-test_button,Test,测试
+connect_button,Connect,连接
+connection_connecting,Connecting SSH…,正在连接 SSH…
+connection_required,"Host, username, and password are required.","必须填写主机、用户名和密码。"
+connection_ready,SSH connected in {elapsedMs} ms,SSH 已连接（{elapsedMs} ms）
+connection_reused,SSH connection reused in {elapsedMs} ms,SSH 连接复用（{elapsedMs} ms）
+workspace_none,No workspace,未打开工作区
+git_root_required,Open the Git repository root before using this tool.,请打开 Git 仓库根目录后再使用此工具。
 reset_button,Reset,重置
 save_button,Save,保存
 query_placeholder,Search,搜索
+file_query_label,File Search,文件搜索
+file_query_placeholder,Search files by name or path,按文件名或路径搜索文件
 include_placeholder,"For example: *.ts, src/**, include/**","例如: *.ts, src/**, include/**"
 exclude_placeholder,"For example: node_modules, build/**, *.min.js","例如: node_modules, build/**, *.min.js"
 include_hint_placeholder,"For example: *.ts, *.cpp, src/**, include/**","例如: *.ts, *.cpp, src/**, include/**"
@@ -35,6 +45,8 @@ ctags_build_done,Tag index ready.,标签索引已就绪。
 ctags_build_failed,ctags failed. Check the output channel for details.,ctags 失败。请查看输出通道中的详细信息。
 err_not_git_workspace,Open the Git repository root as the workspace folder (e.g. trunk) so "git branch" works.,请把 Git 仓库根目录作为工作区文件夹打开（例如 trunk），使「git branch」能执行。
 err_ctags_missing,No ctags on the server and no bundled ctags. Add assets/bin/ctags or install ctags on the server.,服务器上未找到 ctags，且扩展未带内置 ctags。请将可执行文件放入 assets/bin/ctags，或在服务器上安装 ctags。
+err_remote_search_path_required,Set Remote Search Path for this workspace opening style.,当前工作区打开方式无法自动推导远端目录，请设置远端搜索路径。
+open_failed,Failed to open match: {message},打开匹配项失败：{message}
 def_searching,Resolving symbol…,正在解析符号…
 def_no_results,No definition matches,无定义匹配
 rebuild_tags_button,Rebuild tags,重建 tags

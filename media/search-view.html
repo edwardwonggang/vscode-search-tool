@@ -34,6 +34,13 @@
         </div>
       </div>
 
+      <div class="fieldBlock fileSearchBlock" id="fileSearchBlock">
+        <div class="fieldLabel" data-i18n="file_query_label"></div>
+        <div class="inputWrap inputWrapSmall">
+          <input id="fileQuery" type="text" />
+        </div>
+      </div>
+
       <div class="fieldBlock" id="includeBlock">
         <div class="fieldLabel" data-i18n="include_label"></div>
         <div class="inputWrap inputWrapSmall">
@@ -74,56 +81,70 @@
         </button>
       </div>
       <div class="modalBody">
-        <div class="settingsSection">
-          <h3 class="sectionTitle" data-i18n="remote_section_title"></h3>
-          <p class="sectionHint" data-i18n="remote_section_hint"></p>
-          <div class="settingsGrid">
-            <div class="fieldGroup fieldGroupRow">
-              <div class="fieldGroup fieldGroupCell">
-                <div class="fieldLabel" data-i18n="host_label"></div>
-                <input id="remoteHostInput" class="modalInput" type="text" spellcheck="false" />
-              </div>
-              <div class="fieldGroup fieldGroupCell fieldGroupCellNarrow">
-                <div class="fieldLabel" data-i18n="port_label"></div>
-                <input id="remotePortInput" class="modalInput" type="text" spellcheck="false" />
+        <section class="settingsSection remoteSettingsSection">
+          <div class="sectionHeading">
+            <h3 class="sectionTitle" data-i18n="remote_section_title"></h3>
+            <p class="sectionHint" data-i18n="remote_section_hint"></p>
+          </div>
+          <div class="remoteSettingsGrid">
+            <div class="fieldGroup fieldHost">
+              <div class="fieldLabel" data-i18n="host_label"></div>
+              <input id="remoteHostInput" class="modalInput" type="text" spellcheck="false" />
+            </div>
+            <div class="fieldGroup fieldPort">
+              <div class="fieldLabel" data-i18n="port_label"></div>
+              <input id="remotePortInput" class="modalInput" type="text" spellcheck="false" inputmode="numeric" />
+            </div>
+            <div class="fieldGroup fieldUser">
+              <div class="fieldLabel" data-i18n="username_label"></div>
+              <input id="remoteUsernameInput" class="modalInput" type="text" spellcheck="false" />
+            </div>
+            <div class="fieldGroup fieldPassword">
+              <div class="fieldLabel" data-i18n="password_label"></div>
+              <div class="passwordWrap">
+                <input id="remotePasswordInput" class="modalInput" type="password" spellcheck="false" />
+                <button id="togglePasswordButton" class="passwordToggle" type="button">
+                  <span class="iconSlot" id="togglePasswordIcon" aria-hidden="true"></span>
+                </button>
               </div>
             </div>
-          </div>
-          <div class="fieldGroup">
-            <div class="fieldLabel" data-i18n="username_label"></div>
-            <input id="remoteUsernameInput" class="modalInput" type="text" spellcheck="false" />
-          </div>
-          <div class="fieldGroup">
-            <div class="fieldLabel" data-i18n="password_label"></div>
-            <div class="passwordWrap">
-              <input id="remotePasswordInput" class="modalInput" type="password" spellcheck="false" />
-              <button id="togglePasswordButton" class="passwordToggle" type="button">
-                <span class="iconSlot" id="togglePasswordIcon" aria-hidden="true"></span>
-              </button>
+            <div class="fieldGroup fieldFull">
+              <div class="fieldLabel" data-i18n="remote_search_path_label"></div>
+              <input
+                id="remoteSearchPathInput"
+                class="modalInput"
+                type="text"
+                spellcheck="false"
+                data-i18n-placeholder="remote_search_path_placeholder"
+              />
             </div>
           </div>
-        </div>
+        </section>
 
-        <div class="settingsSection">
-          <h3 class="sectionTitle" data-i18n="filters_section_title"></h3>
-          <div class="fieldGroup">
-            <div class="fieldLabel" data-i18n="include_globs_label"></div>
-            <textarea id="includeGlobsInput" class="settingsTextarea" spellcheck="false" rows="4"></textarea>
+        <section class="settingsSection">
+          <div class="sectionHeading compact">
+            <h3 class="sectionTitle" data-i18n="filters_section_title"></h3>
           </div>
-          <div class="fieldGroup">
-            <div class="fieldLabel" data-i18n="exclude_globs_label"></div>
-            <textarea id="excludeGlobsInput" class="settingsTextarea" spellcheck="false" rows="4"></textarea>
+          <div class="filtersGrid">
+            <div class="fieldGroup">
+              <div class="fieldLabel" data-i18n="include_globs_label"></div>
+              <textarea id="includeGlobsInput" class="settingsTextarea" spellcheck="false" rows="4"></textarea>
+            </div>
+            <div class="fieldGroup">
+              <div class="fieldLabel" data-i18n="exclude_globs_label"></div>
+              <textarea id="excludeGlobsInput" class="settingsTextarea" spellcheck="false" rows="4"></textarea>
+            </div>
           </div>
-        </div>
+        </section>
       </div>
 
       <div class="modalFooter">
         <div id="connectionStatus" class="modalStatus"></div>
-        <div class="modalFooterLeft">
+        <div class="modalFooterSecondary">
           <button id="rebuildTagsButton" class="textButton" type="button" data-i18n="rebuild_tags_button"></button>
         </div>
         <div class="modalFooterActions">
-          <button id="testConnectionButton" class="textButton" type="button" data-i18n="test_button"></button>
+          <button id="connectButton" class="textButton" type="button" data-i18n="connect_button"></button>
           <button id="resetSettingsButton" class="textButton" type="button" data-i18n="reset_button"></button>
           <button id="saveSettingsButton" class="textButton primary" type="button" data-i18n="save_button"></button>
         </div>

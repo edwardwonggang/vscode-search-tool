@@ -144,6 +144,10 @@ textarea:focus-visible,
   margin-top: 0;
 }
 
+.fileSearchBlock {
+  margin-top: 4px;
+}
+
 .fieldLabel {
   color: var(--muted);
   font-size: 11px;
@@ -222,6 +226,33 @@ textarea:focus-visible,
 .iconToggle.active:hover {
   color: var(--search-toggle-on);
   background: var(--search-toggle-on-bg);
+}
+
+.root.gitBlocked input,
+.root.gitBlocked textarea,
+.root.gitBlocked button,
+.root.gitBlocked .iconToggle {
+  cursor: not-allowed;
+}
+
+.root.gitBlocked input,
+.root.gitBlocked textarea,
+.root.gitBlocked button,
+.root.gitBlocked .iconToggle,
+.root.gitBlocked .queryBox,
+.root.gitBlocked .inputWrap {
+  opacity: 0.55;
+}
+
+.root.gitBlocked .iconToggle:hover,
+.root.gitBlocked .iconButton:hover,
+.root.gitBlocked .iconToggle.active,
+.root.gitBlocked .iconToggle.active:hover,
+.root.gitBlocked .queryBox:focus-within,
+.root.gitBlocked .inputWrap:focus-within {
+  border-color: var(--input-border, transparent);
+  background: transparent;
+  color: var(--search-toggle-off);
 }
 
 .iconButton:hover {
@@ -313,6 +344,16 @@ textarea:focus-visible,
   text-align: left;
 }
 
+.gitRootRequired {
+  padding: 18px var(--view-edge-inset);
+  color: var(--vscode-errorForeground, #f14c4c);
+  font-size: 20px;
+  line-height: 1.35;
+  font-weight: 700;
+  text-align: left;
+  white-space: normal;
+}
+
 .fileHeader {
   display: grid;
   grid-template-columns: 16px var(--file-header-icon-col) minmax(0, 1fr) auto;
@@ -336,6 +377,18 @@ textarea:focus-visible,
 .fileHeader:hover,
 .match:hover {
   background: var(--hover);
+}
+
+.fileSearchResult .fileHeader {
+  grid-template-columns: 16px var(--file-header-icon-col) minmax(0, 1fr) 0;
+}
+
+.fileSearchResult .treeIcon {
+  visibility: hidden;
+}
+
+.fileSearchResult .badge {
+  display: none;
 }
 
 .treeIcon {
@@ -601,11 +654,11 @@ mark {
 .modal {
   display: flex;
   flex-direction: column;
-  width: min(100%, 640px);
-  max-height: min(85vh, 720px);
+  width: min(100%, 760px);
+  max-height: min(88vh, 760px);
   min-height: 0;
   border: 1px solid var(--modal-border);
-  border-radius: 3px;
+  border-radius: 6px;
   background: var(--modal-bg);
   box-shadow: var(--modal-shadow);
   color: var(--vscode-foreground);
@@ -616,16 +669,16 @@ mark {
   flex-shrink: 0;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
-  min-height: 36px;
-  padding: 0 4px 0 12px;
+  gap: 12px;
+  min-height: 42px;
+  padding: 0 6px 0 16px;
   border-bottom: 1px solid var(--modal-border);
   background: var(--vscode-sideBarTitle-background, var(--modal-bg));
 }
 
 .modalTitle {
   margin: 0;
-  padding: 8px 0;
+  padding: 10px 0;
   font-size: 13px;
   font-weight: 600;
   line-height: 1.35;
@@ -670,10 +723,10 @@ mark {
 .modalBody {
   display: flex;
   flex-direction: column;
-  gap: 0;
+  gap: 14px;
   flex: 1 1 auto;
   min-height: 0;
-  padding: 10px 12px 6px;
+  padding: 14px 16px 12px;
   overflow-x: hidden;
   overflow-y: auto;
   font-size: 13px;
@@ -682,20 +735,29 @@ mark {
 .settingsSection {
   display: flex;
   flex-direction: column;
-  gap: 0;
-  margin: 0 0 12px;
-  padding: 0 0 12px;
-  border-bottom: 1px solid var(--border);
+  gap: 10px;
+  margin: 0;
+  padding: 0 0 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
 }
 
 .settingsSection:last-of-type {
-  margin-bottom: 0;
   padding-bottom: 0;
   border-bottom: 0;
 }
 
+.sectionHeading {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.sectionHeading.compact {
+  gap: 0;
+}
+
 .sectionTitle {
-  margin: 0 0 4px;
+  margin: 0;
   padding: 0;
   color: var(--settings-section-fg);
   font-size: 12px;
@@ -704,53 +766,53 @@ mark {
 }
 
 .sectionHint {
-  margin: 0 0 10px;
+  margin: 0;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.45;
 }
 
-.settingsGrid {
-  display: block;
+.remoteSettingsGrid,
+.filtersGrid {
+  display: grid;
+  min-width: 0;
+  gap: 10px 12px;
 }
 
-.fieldGroupRow {
-  display: flex;
-  flex-direction: row;
-  flex-wrap: nowrap;
-  align-items: flex-start;
-  gap: 10px;
-  width: 100%;
-  max-width: 100%;
-  min-width: 0;
-  box-sizing: border-box;
+.remoteSettingsGrid {
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  align-items: end;
 }
 
-.fieldGroupCell {
-  flex: 1 1 0;
-  min-width: 0;
-  max-width: 100%;
+.filtersGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
 }
 
-.fieldGroupCellNarrow {
-  flex: 0 0 auto;
-  width: 84px;
-  max-width: min(32%, 96px);
-  min-width: 0;
+.fieldHost {
+  grid-column: span 5;
+}
+
+.fieldPort {
+  grid-column: span 2;
+}
+
+.fieldUser {
+  grid-column: span 5;
+}
+
+.fieldPassword {
+  grid-column: span 5;
+}
+
+.fieldFull {
+  grid-column: span 7;
 }
 
 .fieldGroup {
   display: grid;
   gap: 4px;
-  margin-bottom: 8px;
-}
-
-.fieldGroupRow > .fieldGroup {
-  margin-bottom: 0;
-}
-
-.fieldGroup:last-child {
-  margin-bottom: 0;
+  min-width: 0;
 }
 
 .modal .fieldLabel {
@@ -768,8 +830,8 @@ mark {
 
 .modalInput {
   box-sizing: border-box;
-  min-height: 26px;
-  padding: 3px 8px;
+  min-height: 28px;
+  padding: 4px 8px;
   border: 1px solid var(--input-border, var(--border));
   border-radius: 2px;
   background: var(--input-bg);
@@ -797,7 +859,7 @@ mark {
 
 .passwordWrap {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 30px;
+  grid-template-columns: minmax(0, 1fr) 32px;
   gap: 0;
   border: 1px solid var(--input-border, var(--border));
   border-radius: 2px;
@@ -814,8 +876,8 @@ mark {
 }
 
 .passwordToggle {
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 28px;
   border: 0;
   border-left: 1px solid var(--border);
   border-radius: 0 2px 2px 0;
@@ -831,7 +893,9 @@ mark {
 }
 
 .settingsTextarea {
-  min-height: 90px;
+  display: block;
+  width: 100%;
+  min-height: 112px;
   max-height: 40vh;
   resize: vertical;
   padding: 6px 8px;
@@ -887,22 +951,26 @@ mark {
 }
 
 .modalFooter {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
   flex-shrink: 0;
-  gap: 8px 10px;
-  padding: 8px 10px 8px 12px;
+  gap: 8px 12px;
+  padding: 10px 12px 10px 16px;
   border-top: 1px solid var(--border);
   background: var(--vscode-sideBarTitle-background, var(--modal-bg));
 }
 
-.modalFooterLeft {
-  flex: 0 0 auto;
+.modalFooterSecondary {
+  grid-column: 1;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
 }
 
 .modalStatus {
-  flex: 1 1 160px;
+  grid-column: 1 / -1;
   min-width: 0;
   color: var(--muted);
   font-size: 12px;
@@ -917,7 +985,8 @@ mark {
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  margin-left: auto;
+  grid-column: 2;
+  grid-row: 2;
 }
 
 .textButton {
@@ -952,4 +1021,42 @@ mark {
 .textButton.primary:hover {
   background: var(--vscode-button-hoverBackground, var(--vscode-button-background));
   color: var(--vscode-button-hoverForeground, var(--vscode-button-foreground));
+}
+
+@media (max-width: 680px) {
+  .modalLayer {
+    align-items: stretch;
+    padding: 12px;
+  }
+
+  .modal {
+    max-height: calc(100vh - 24px);
+  }
+
+  .remoteSettingsGrid,
+  .filtersGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .fieldHost,
+  .fieldPort,
+  .fieldUser,
+  .fieldPassword,
+  .fieldFull {
+    grid-column: 1;
+  }
+
+  .modalFooter {
+    grid-template-columns: 1fr;
+  }
+
+  .modalFooterSecondary,
+  .modalFooterActions {
+    grid-column: 1;
+  }
+
+  .modalFooterActions {
+    grid-row: auto;
+    justify-content: flex-start;
+  }
 }
