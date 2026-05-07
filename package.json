@@ -2,19 +2,15 @@
   "name": "ripgreptool",
   "displayName": "Ripgrep Tool",
   "description": "Remote ripgrep search in the sidebar. Limits and setup are in the README (extension details), not in the in-editor UI.",
-  "version": "0.0.1",
+  "version": "0.0.12",
   "publisher": "local",
   "license": "UNLICENSED",
   "engines": {
-    "vscode": "^1.91.0"
+    "vscode": "^1.90.0"
   },
   "categories": [
     "Search",
     "Other"
-  ],
-  "activationEvents": [
-    "onView:ripgrepTool.searchView",
-    "onCommand:ripgrepTool.focusSearch"
   ],
   "main": "./dist/extension.js",
   "contributes": {
@@ -40,6 +36,14 @@
       {
         "command": "ripgrepTool.focusSearch",
         "title": "Ripgrep Tool: Focus Search"
+      },
+      {
+        "command": "ripgrepTool.openLogFile",
+        "title": "Ripgrep Tool: Open Log File"
+      },
+      {
+        "command": "ripgrepTool.revealLogFile",
+        "title": "Ripgrep Tool: Reveal Log File"
       }
     ],
     "configuration": {
@@ -76,20 +80,27 @@
           "minimum": 0,
           "maximum": 256,
           "description": "Ripgrep thread count. Use 0 to let ripgrep choose."
+        },
+        "ripgrepTool.verboseLogging": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable detailed diagnostics in the 'Ripgrep Tool' output channel."
         }
       }
     }
   },
   "scripts": {
-    "build": "tsc -p ./",
-    "package": "npm run build && npx @vscode/vsce package --allow-missing-repository",
+    "build": "tsc -p ./ --noEmit && node scripts/bundle-extension.mjs",
+    "package": "npm run build && npx @vscode/vsce package --no-dependencies --allow-missing-repository",
+    "update": "node scripts/update-extension.mjs",
     "watch": "tsc -w -p ./"
   },
   "devDependencies": {
     "@types/node": "^22.15.3",
     "@types/ssh2": "^1.15.5",
-    "@types/vscode": "^1.91.0",
+    "@types/vscode": "^1.90.0",
     "@vscode/vsce": "^3.6.2",
+    "esbuild": "^0.28.0",
     "typescript": "^5.8.3"
   },
   "dependencies": {

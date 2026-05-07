@@ -7,6 +7,7 @@
   const iconUris = bootstrap.iconUris || {};
 
   const queryEl = document.getElementById('query');
+  const fileQueryEl = document.getElementById('fileQuery');
   const includeEl = document.getElementById('include');
   const excludeEl = document.getElementById('exclude');
   const caseSensitiveEl = document.getElementById('caseSensitive');
@@ -23,12 +24,13 @@
   const remotePortInputEl = document.getElementById('remotePortInput');
   const remoteUsernameInputEl = document.getElementById('remoteUsernameInput');
   const remotePasswordInputEl = document.getElementById('remotePasswordInput');
+  const remoteSearchPathInputEl = document.getElementById('remoteSearchPathInput');
   const togglePasswordButtonEl = document.getElementById('togglePasswordButton');
   const togglePasswordIconEl = document.getElementById('togglePasswordIcon');
   const includeGlobsInputEl = document.getElementById('includeGlobsInput');
   const excludeGlobsInputEl = document.getElementById('excludeGlobsInput');
   const closeSettingsButtonEl = document.getElementById('closeSettingsButton');
-  const testConnectionButtonEl = document.getElementById('testConnectionButton');
+  const connectButtonEl = document.getElementById('connectButton');
   const connectionStatusEl = document.getElementById('connectionStatus');
   const resetSettingsButtonEl = document.getElementById('resetSettingsButton');
   const saveSettingsButtonEl = document.getElementById('saveSettingsButton');
@@ -50,12 +52,40 @@
     remotePort: defaultRemotePort,
     remoteUsername: '',
     remotePassword: '',
+    remoteSearchPath: '',
     includeGlobs: [...defaultIncludeGlobs],
     excludeGlobs: [...defaultExcludeGlobs]
   };
+  let gitRootOk = true;
+  let gitRootMessage = '';
+  let workspacePath = '';
   const collapsedFiles = new Set(Array.isArray(vscodeState.collapsedFiles) ? vscodeState.collapsedFiles : []);
   const SEARCH_INPUT_DEBOUNCE_MS = 300;
   let searchDebounceTimer = null;
+
+  const gitRootBoundControls = [
+    queryEl,
+    fileQueryEl,
+    includeEl,
+    excludeEl,
+    caseSensitiveEl,
+    wholeWordEl,
+    useRegexEl,
+    definitionModeEl,
+    settingsButton,
+    remoteHostInputEl,
+    remotePortInputEl,
+    remoteUsernameInputEl,
+    remotePasswordInputEl,
+    remoteSearchPathInputEl,
+    togglePasswordButtonEl,
+    includeGlobsInputEl,
+    excludeGlobsInputEl,
+    connectButtonEl,
+    resetSettingsButtonEl,
+    saveSettingsButtonEl,
+    rebuildTagsButtonEl
+  ].filter(Boolean);
 
   const icons = {
     eye: null,
@@ -96,6 +126,7 @@
   const fileNamePaletteSize = 30;
 
   if (typeof vscodeState.query === 'string') queryEl.value = vscodeState.query;
+  if (typeof vscodeState.fileQuery === 'string') fileQueryEl.value = vscodeState.fileQuery;
   if (typeof vscodeState.include === 'string') includeEl.value = vscodeState.include;
   if (typeof vscodeState.exclude === 'string') excludeEl.value = vscodeState.exclude;
   caseSensitiveEl.checked = !!vscodeState.caseSensitive;
@@ -104,6 +135,7 @@
   definitionModeEl.checked = !!vscodeState.definitionMode;
   if (typeof vscodeState.summaryText === 'string') summaryTextEl.textContent = vscodeState.summaryText;
   if (typeof vscodeState.workspaceName === 'string') workspaceNameEl.textContent = vscodeState.workspaceName;
+  if (typeof vscodeState.workspacePath === 'string') workspacePath = vscodeState.workspacePath;
   if (typeof vscodeState.resultsHtml === 'string') resultsEl.innerHTML = vscodeState.resultsHtml;
 
   void initializeIcons();
@@ -233,7 +265,14 @@
         node.setAttribute('aria-label', t(key));
       }
     });
+    document.querySelectorAll('[data-i18n-placeholder]').forEach((node) => {
+      const key = node.getAttribute('data-i18n-placeholder');
+      if (key) {
+        node.placeholder = t(key);
+      }
+    });
     queryEl.placeholder = t('query_placeholder');
+    fileQueryEl.placeholder = t('file_query_placeholder');
     includeEl.placeholder = '';
     excludeEl.placeholder = '';
     syncPasswordToggle();
@@ -249,9 +288,51 @@
     }
   }
 
+  function updateWorkspacePathDisplay(value) {
+    workspacePath = value || '';
+    workspaceNameEl.textContent = workspacePath;
+    workspaceNameEl.title = workspacePath;
+  }
+
+  function setGitRootState(ok, message) {
+    gitRootOk = ok !== false;
+    gitRootMessage = gitRootOk ? '' : (message || t('git_root_required'));
+    syncGitRootDisabledState();
+    if (!gitRootOk) {
+      renderGitRootRequired(gitRootMessage);
+    }
+  }
+
+  function syncGitRootDisabledState() {
+    const blocked = !gitRootOk;
+    const root = document.querySelector('.root');
+    if (root) {
+      root.classList.toggle('gitBlocked', blocked);
+    }
+    gitRootBoundControls.forEach((control) => {
+      control.disabled = blocked;
+      control.setAttribute('aria-disabled', blocked ? 'true' : 'false');
+    });
+    togglePairs.forEach(([toggle]) => {
+      if (toggle) {
+        toggle.classList.toggle('disabled', blocked);
+      }
+    });
+    if (blocked && settingsLayerEl.classList.contains('open')) {
+      closeSettings();
+    }
+  }
+
+  function renderGitRootRequired(message) {
+    resultsEl.innerHTML = `<div class="gitRootRequired">${escapeHtml(message)}</div>`;
+    persistState();
+  }
+
   function getPayload() {
+    const fileQuery = fileQueryEl.value;
     return {
-      query: queryEl.value,
+      query: fileQuery.trim() ? '' : queryEl.value,
+      fileQuery,
       include: includeEl.value,
       exclude: excludeEl.value,
       caseSensitive: caseSensitiveEl.checked,
@@ -269,6 +350,11 @@
   }
 
   function postSearchToExtension(clearFileCollapse) {
+    enforceExclusiveSearchFields();
+    if (!gitRootOk) {
+      renderGitRootRequired(gitRootMessage || t('git_root_required'));
+      return;
+    }
     currentOptions = getPayload();
     if (clearFileCollapse) {
       collapsedFiles.clear();
@@ -284,7 +370,7 @@
 
   function scheduleSearchRefresh() {
     clearSearchDebounce();
-    const q = String(queryEl.value).trim();
+    const q = String(queryEl.value).trim() || String(fileQueryEl.value).trim();
     if (!q) {
       postSearchToExtension(false);
       return;
@@ -315,6 +401,11 @@
   }
 
   function renderResults(items) {
+    if (!gitRootOk) {
+      renderGitRootRequired(gitRootMessage || t('git_root_required'));
+      return;
+    }
+    const isFileSearch = currentOptions.fileQuery && String(currentOptions.fileQuery).trim();
     if (!items.length) {
       resultsEl.innerHTML = `<div class="empty">${escapeHtml(t('empty_results'))}</div>`;
       persistState();
@@ -323,27 +414,34 @@
 
     resultsEl.innerHTML = items.map((file, index) => {
       const parts = splitPath(file.relativePath);
-      const collapsed = collapsedFiles.has(file.path);
+      const collapsed = !isFileSearch && collapsedFiles.has(file.path);
       const chevron = collapsed
         ? (icons.chevronRight || '&#9656;')
         : (icons.chevronDown || '&#9662;');
       const fileNameColorIndex = getFileNamePaletteIndex(index);
-      const matches = file.matches.map((match) => {
+      const matches = isFileSearch ? '' : file.matches.map((match) => {
         const payload = encodeURIComponent(JSON.stringify(match));
         return `<button class="match" type="button" data-match="${payload}">
           <span class="preview">${formatPreview(match.preview, match)}</span>
         </button>`;
       }).join('');
+      const filePayload = encodeURIComponent(JSON.stringify(file.matches[0] || {
+        path: file.path,
+        line: 1,
+        column: 1,
+        endColumn: 2,
+        preview: file.relativePath
+      }));
 
-      return `<section class="file ${collapsed ? 'collapsed' : ''}">
-        <button class="fileHeader" type="button" data-toggle-file="${encodeURIComponent(file.path)}">
+      return `<section class="file ${collapsed ? 'collapsed' : ''} ${isFileSearch ? 'fileSearchResult' : ''}">
+        <button class="fileHeader" type="button" ${isFileSearch ? `data-match="${filePayload}"` : `data-toggle-file="${encodeURIComponent(file.path)}"`}>
           <span class="treeIcon" aria-hidden="true">${chevron}</span>
           ${getFileIconMarkup(file.relativePath)}
           <span class="fileName fileNameColor${fileNameColorIndex}">
             <span class="base">${escapeHtml(parts.name)}</span>
             <span class="dir">${escapeHtml(parts.dir)}</span>
           </span>
-          <span class="badge">${file.count}</span>
+          <span class="badge">${isFileSearch ? '' : file.count}</span>
         </button>
         <div class="matches">${matches}</div>
       </section>`;
@@ -427,13 +525,13 @@
     return result;
   }
 
-  function syncToggleState() {
+  function syncToggleState(searchOnQuery = true) {
     for (const [toggle, input] of togglePairs) {
       toggle.classList.toggle('active', input.checked);
     }
     syncDefinitionRootClass();
     persistState();
-    if (String(queryEl.value).trim()) {
+    if (searchOnQuery && (String(queryEl.value).trim() || String(fileQueryEl.value).trim())) {
       clearSearchDebounce();
       postSearchToExtension(true);
     }
@@ -451,6 +549,7 @@
   function persistState() {
     vscode.setState({
       query: queryEl.value,
+      fileQuery: fileQueryEl.value,
       include: includeEl.value,
       exclude: excludeEl.value,
       caseSensitive: caseSensitiveEl.checked,
@@ -460,15 +559,21 @@
       collapsedFiles: Array.from(collapsedFiles),
       summaryText: summaryTextEl.textContent || '',
       workspaceName: workspaceNameEl.textContent || '',
+      workspacePath,
       resultsHtml: resultsEl.innerHTML
     });
   }
 
   function openSettings() {
+    if (!gitRootOk) {
+      renderGitRootRequired(gitRootMessage || t('git_root_required'));
+      return;
+    }
     remoteHostInputEl.value = currentSettings.remoteHost || '';
     remotePortInputEl.value = String(currentSettings.remotePort || defaultRemotePort);
     remoteUsernameInputEl.value = currentSettings.remoteUsername || '';
     remotePasswordInputEl.value = currentSettings.remotePassword || '';
+    remoteSearchPathInputEl.value = currentSettings.remoteSearchPath || '';
     includeGlobsInputEl.value = currentSettings.includeGlobs.join('\n');
     excludeGlobsInputEl.value = currentSettings.excludeGlobs.join('\n');
     connectionStatusEl.textContent = '';
@@ -498,26 +603,38 @@
       remotePort: Number.isFinite(remotePort) ? remotePort : defaultRemotePort,
       remoteUsername: remoteUsernameInputEl.value.trim(),
       remotePassword: remotePasswordInputEl.value,
+      remoteSearchPath: remoteSearchPathInputEl.value.trim(),
       includeGlobs: includeGlobsInputEl.value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean),
       excludeGlobs: excludeGlobsInputEl.value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
     };
   }
 
   function saveSettings() {
+    if (!gitRootOk) {
+      renderGitRootRequired(gitRootMessage || t('git_root_required'));
+      return;
+    }
     vscode.postMessage({ type: 'saveSettings', payload: buildSettingsPayload() });
     closeSettings();
-    if (String(queryEl.value).trim()) {
+    if (String(queryEl.value).trim() || String(fileQueryEl.value).trim()) {
       scheduleSearchRefresh();
     }
   }
 
   queryEl.addEventListener('keydown', (event) => {
+    if (!gitRootOk) return;
+    if (event.key === 'Enter') startSearch();
+  });
+  fileQueryEl.addEventListener('keydown', (event) => {
+    if (!gitRootOk) return;
     if (event.key === 'Enter') startSearch();
   });
   includeEl.addEventListener('keydown', (event) => {
+    if (!gitRootOk) return;
     if (event.key === 'Enter') startSearch();
   });
   excludeEl.addEventListener('keydown', (event) => {
+    if (!gitRootOk) return;
     if (event.key === 'Enter') startSearch();
   });
   [includeEl, excludeEl].forEach((input) => {
@@ -529,39 +646,67 @@
   useRegexEl.addEventListener('change', syncToggleState);
   definitionModeEl.addEventListener('change', syncToggleState);
   queryEl.addEventListener('input', () => {
+    if (!gitRootOk) return;
+    if (queryEl.value) {
+      fileQueryEl.value = '';
+    }
+    persistState();
+    scheduleSearchRefresh();
+  });
+  fileQueryEl.addEventListener('input', () => {
+    if (!gitRootOk) return;
+    if (fileQueryEl.value) {
+      queryEl.value = '';
+    }
     persistState();
     scheduleSearchRefresh();
   });
   includeEl.addEventListener('input', () => {
+    if (!gitRootOk) return;
     persistState();
     scheduleSearchRefresh();
   });
   excludeEl.addEventListener('input', () => {
+    if (!gitRootOk) return;
     persistState();
     scheduleSearchRefresh();
   });
   settingsButton.addEventListener('click', openSettings);
   closeSettingsButtonEl.addEventListener('click', closeSettings);
   resetSettingsButtonEl.addEventListener('click', () => {
+    if (!gitRootOk) {
+      renderGitRootRequired(gitRootMessage || t('git_root_required'));
+      return;
+    }
     remoteHostInputEl.value = '';
     remotePortInputEl.value = String(defaultRemotePort);
     remoteUsernameInputEl.value = '';
     remotePasswordInputEl.value = '';
+    remoteSearchPathInputEl.value = '';
     includeGlobsInputEl.value = defaultIncludeGlobs.join('\n');
     excludeGlobsInputEl.value = defaultExcludeGlobs.join('\n');
     connectionStatusEl.textContent = '';
   });
-  testConnectionButtonEl.addEventListener('click', () => {
-    connectionStatusEl.textContent = 'Testing...';
-    vscode.postMessage({ type: 'testConnection', payload: buildSettingsPayload() });
+  connectButtonEl.addEventListener('click', () => {
+    if (!gitRootOk) {
+      renderGitRootRequired(gitRootMessage || t('git_root_required'));
+      return;
+    }
+    connectionStatusEl.textContent = t('connection_connecting');
+    vscode.postMessage({ type: 'connect', payload: buildSettingsPayload() });
   });
   saveSettingsButtonEl.addEventListener('click', saveSettings);
   if (rebuildTagsButtonEl) {
     rebuildTagsButtonEl.addEventListener('click', () => {
+      if (!gitRootOk) {
+        renderGitRootRequired(gitRootMessage || t('git_root_required'));
+        return;
+      }
       vscode.postMessage({ type: 'rebuildTags' });
     });
   }
   togglePasswordButtonEl.addEventListener('click', () => {
+    if (!gitRootOk) return;
     remotePasswordInputEl.type = remotePasswordInputEl.type === 'password' ? 'text' : 'password';
     syncPasswordToggle();
   });
@@ -572,6 +717,10 @@
     if (event.key === 'Escape' && settingsLayerEl.classList.contains('open')) closeSettings();
   });
   resultsEl.addEventListener('click', (event) => {
+    if (!gitRootOk) {
+      renderGitRootRequired(gitRootMessage || t('git_root_required'));
+      return;
+    }
     const toggleTarget = event.target.closest('[data-toggle-file]');
     if (toggleTarget) {
       const filePath = decodeURIComponent(toggleTarget.dataset.toggleFile);
@@ -594,9 +743,10 @@
     if (message.type === 'bootstrap') {
       translations = message.payload.translations || {};
       currentSettings = message.payload.settings || currentSettings;
-      workspaceNameEl.textContent = message.payload.workspaceName || '';
       applyTranslations();
+      updateWorkspacePathDisplay(message.payload.workspacePath || message.payload.workspaceName || '');
       syncDefinitionRootClass();
+      setGitRootState(message.payload.gitRootOk, message.payload.gitError);
       if (message.payload.state) {
         summaryTextEl.textContent = message.payload.state.error || message.payload.state.summary || '';
       }
@@ -607,6 +757,11 @@
       return;
     }
     if (message.type === 'focus') queryEl.focus();
+    if (message.type === 'gitRootRequired') {
+      updateWorkspacePathDisplay(message.payload.workspacePath || workspacePath);
+      setGitRootState(false, message.payload.message || t('git_root_required'));
+      return;
+    }
     if (message.type === 'state') {
       summaryTextEl.textContent = message.error || message.summary || '';
       if (ctagsProgressRowEl) {
@@ -618,14 +773,25 @@
       }
       persistState();
     }
-    if (message.type === 'results') renderResults(message.items);
+    if (message.type === 'results') {
+      if (message.mode) {
+        currentOptions = getPayload();
+      }
+      renderResults(message.items);
+    }
     if (message.type === 'settings') currentSettings = message.payload;
-    if (message.type === 'connectionTest') connectionStatusEl.textContent = message.payload.message || '';
+    if (message.type === 'connectionResult') connectionStatusEl.textContent = message.payload.message || '';
   });
 
-  syncToggleState();
+  syncToggleState(false);
   syncPasswordToggle();
   setFieldFocus(includeEl, false);
   setFieldFocus(excludeEl, false);
   vscode.postMessage({ type: 'ready' });
+
+  function enforceExclusiveSearchFields() {
+    if (String(fileQueryEl.value).trim() && String(queryEl.value).trim()) {
+      queryEl.value = '';
+    }
+  }
 })();
