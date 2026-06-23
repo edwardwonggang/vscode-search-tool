@@ -25,6 +25,7 @@
   const remoteUsernameInputEl = document.getElementById('remoteUsernameInput');
   const remotePasswordInputEl = document.getElementById('remotePasswordInput');
   const remoteSearchPathInputEl = document.getElementById('remoteSearchPathInput');
+  const currentRemotePathValueEl = document.getElementById('currentRemotePathValue');
   const togglePasswordButtonEl = document.getElementById('togglePasswordButton');
   const togglePasswordIconEl = document.getElementById('togglePasswordIcon');
   const includeGlobsInputEl = document.getElementById('includeGlobsInput');
@@ -47,6 +48,7 @@
 
   let translations = {};
   let currentOptions = getPayload();
+  let currentResultMode = 'content';
   let currentSettings = {
     remoteHost: '',
     remotePort: defaultRemotePort,
@@ -59,9 +61,31 @@
   let gitRootOk = true;
   let gitRootMessage = '';
   let workspacePath = '';
+  let currentRemotePath = '';
+  let lastSearchSummaryText = '';
+  let lastRenderTimingInfo = null;
+  let nextSearchRequestId = Number.isFinite(vscodeState.nextSearchRequestId) ? vscodeState.nextSearchRequestId : 1;
+  let activeSearchRequestId = Number.isFinite(vscodeState.activeSearchRequestId) ? vscodeState.activeSearchRequestId : 0;
   const collapsedFiles = new Set(Array.isArray(vscodeState.collapsedFiles) ? vscodeState.collapsedFiles : []);
   const SEARCH_INPUT_DEBOUNCE_MS = 300;
+  const SEARCH_HISTORY_STABLE_MS = 5000;
   let searchDebounceTimer = null;
+  let searchHistoryCommitTimer = null;
+  let pendingHistoryKey = '';
+  let lastConnectionSearchKey = '';
+  let lastPostedSearchKey = '';
+  let lastTraceAt = 0;
+  let progressTimer = null;
+  let progressInfo = null;
+  let lastResultAction = { key: '', at: 0 };
+  const searchHistory = new window.RipgrepToolSearchHistory({
+    queryInput: queryEl,
+    fileQueryInput: fileQueryEl,
+    contentEntries: vscodeState.contentSearchHistory,
+    fileEntries: vscodeState.fileSearchHistory,
+    onChanged: persistState,
+    onNavigate: persistState
+  });
 
   const gitRootBoundControls = [
     queryEl,
@@ -87,44 +111,7 @@
     rebuildTagsButtonEl
   ].filter(Boolean);
 
-  const icons = {
-    eye: null,
-    eyeClosed: null,
-    chevronRight: null,
-    chevronDown: null
-  };
-  const fileTypeIcons = {};
-
-  const fileTypeBadge = {
-    c: { label: 'C', color: '#519aba' },
-    h: { label: 'H', color: '#a074c4' },
-    cpp: { label: 'C+', color: '#519aba' },
-    cxx: { label: 'C+', color: '#519aba' },
-    cc: { label: 'C+', color: '#519aba' },
-    hpp: { label: 'H+', color: '#a074c4' },
-    hh: { label: 'H+', color: '#a074c4' },
-    hxx: { label: 'H+', color: '#a074c4' },
-    sh: { label: 'SH', color: '#89e051' },
-    bash: { label: 'SH', color: '#89e051' },
-    ps1: { label: 'PS', color: '#4fc1ff' },
-    md: { label: 'MD', color: '#519aba' },
-    json: { label: '{}', color: '#cbcb41' },
-    yml: { label: 'Y', color: '#f14c4c' },
-    yaml: { label: 'Y', color: '#f14c4c' },
-    xml: { label: 'X', color: '#e37933' },
-    js: { label: 'JS', color: '#cbcb41' },
-    ts: { label: 'TS', color: '#519aba' },
-    jsx: { label: 'JX', color: '#61dafb' },
-    tsx: { label: 'TX', color: '#61dafb' },
-    py: { label: 'PY', color: '#ffd43b' },
-    java: { label: 'J', color: '#cc3e44' },
-    go: { label: 'GO', color: '#00add8' },
-    rs: { label: 'RS', color: '#dea584' },
-    txt: { label: 'T', color: '#9f9f9f' },
-    log: { label: 'L', color: '#9f9f9f' }
-  };
-  const fileNamePaletteSize = 30;
-
+  const iconRegistry = new window.RipgrepToolIcons({ iconUris, escapeHtml });
   if (typeof vscodeState.query === 'string') queryEl.value = vscodeState.query;
   if (typeof vscodeState.fileQuery === 'string') fileQueryEl.value = vscodeState.fileQuery;
   if (typeof vscodeState.include === 'string') includeEl.value = vscodeState.include;
@@ -136,120 +123,16 @@
   if (typeof vscodeState.summaryText === 'string') summaryTextEl.textContent = vscodeState.summaryText;
   if (typeof vscodeState.workspaceName === 'string') workspaceNameEl.textContent = vscodeState.workspaceName;
   if (typeof vscodeState.workspacePath === 'string') workspacePath = vscodeState.workspacePath;
-  if (typeof vscodeState.resultsHtml === 'string') resultsEl.innerHTML = vscodeState.resultsHtml;
-
-  void initializeIcons();
+  if (typeof vscodeState.currentRemotePath === 'string') currentRemotePath = vscodeState.currentRemotePath;
+  void iconRegistry.initialize();
   syncDefinitionRootClass();
-
-  function imgIcon(src, cls = 'iconImg') {
-    return `<img class="${cls}" src="${src}" alt="" />`;
-  }
-
-  async function loadSvgMarkup(uri) {
-    if (!uri) {
-      console.warn('[Ripgrep Tool] loadSvgMarkup: uri is empty');
-      return '';
-    }
-    try {
-      const response = await fetch(uri);
-      if (!response.ok) {
-        console.warn(`[Ripgrep Tool] loadSvgMarkup failed: ${response.status} ${response.statusText} for ${uri}`);
-        return '';
-      }
-      const text = await response.text();
-      console.log(`[Ripgrep Tool] loadSvgMarkup success: ${uri} (${text.length} bytes)`);
-      return text;
-    } catch (error) {
-      console.error(`[Ripgrep Tool] loadSvgMarkup error for ${uri}:`, error);
-      return '';
-    }
-  }
-
-  async function initializeIcons() {
-    console.log('[Ripgrep Tool] initializeIcons started, iconUris:', iconUris);
-
-    if (!iconUris || !iconUris.caseSensitive) {
-      console.error('[Ripgrep Tool] iconUris is empty or invalid!');
-    }
-
-    const fileTypeKeys = iconUris.fileTypes ? Object.keys(iconUris.fileTypes) : [];
-    console.log(`[Ripgrep Tool] Loading ${fileTypeKeys.length} file type icons`);
-
-    const fileTypePromises = fileTypeKeys.map(async (key) => {
-      const uri = iconUris.fileTypes[key];
-      console.log(`[Ripgrep Tool] Loading file type icon: ${key} from ${uri}`);
-      const svg = await loadSvgMarkup(uri);
-      return [key, svg];
-    });
-
-    const [caseSensitiveSvg, wholeWordSvg, regexSvg, settingsSvg, definitionSvg, eyeSvg, eyeClosedSvg, chevronRightSvg, chevronDownSvg, closeSvg, ...fileTypeResults] =
-      await Promise.all([
-        loadSvgMarkup(iconUris.caseSensitive),
-        loadSvgMarkup(iconUris.wholeWord),
-        loadSvgMarkup(iconUris.regex),
-        loadSvgMarkup(iconUris.settings),
-        loadSvgMarkup(iconUris.definition),
-        loadSvgMarkup(iconUris.eye),
-        loadSvgMarkup(iconUris.eyeClosed),
-        loadSvgMarkup(iconUris.chevronRight),
-        loadSvgMarkup(iconUris.chevronDown),
-        loadSvgMarkup(iconUris.close),
-        ...fileTypePromises
-      ]);
-
-    console.log('[Ripgrep Tool] Codicon SVGs loaded:', {
-      caseSensitive: caseSensitiveSvg ? 'yes' : 'no',
-      wholeWord: wholeWordSvg ? 'yes' : 'no',
-      regex: regexSvg ? 'yes' : 'no',
-      settings: settingsSvg ? 'yes' : 'no',
-      eye: eyeSvg ? 'yes' : 'no',
-      eyeClosed: eyeClosedSvg ? 'yes' : 'no',
-      chevronRight: chevronRightSvg ? 'yes' : 'no',
-      chevronDown: chevronDownSvg ? 'yes' : 'no'
-    });
-
-    let loadedFileTypeCount = 0;
-    for (const [key, svg] of fileTypeResults) {
-      if (svg) {
-        fileTypeIcons[key] = svg;
-        loadedFileTypeCount++;
-      }
-    }
-    console.log(`[Ripgrep Tool] Loaded ${loadedFileTypeCount}/${fileTypeKeys.length} file type icons`);
-
-    icons.eye = eyeSvg || '&#128065;';
-    icons.eyeClosed = eyeClosedSvg || '&#128064;';
-    icons.chevronRight = chevronRightSvg || '&#9656;';
-    icons.chevronDown = chevronDownSvg || '&#9662;';
-
-    setIcon('caseSensitiveIcon', caseSensitiveSvg, 'Aa');
-    setIcon('wholeWordIcon', wholeWordSvg, 'W');
-    setIcon('useRegexIcon', regexSvg, '.*');
-    setIcon('definitionModeIcon', definitionSvg, 'D');
-    setIcon('settingsIcon', settingsSvg, '&#9881;');
-    setIcon('closeSettingsIcon', closeSvg, '×');
-    setIcon('togglePasswordIcon', eyeSvg || icons.eye, '&#128065;');
-
-    console.log('[Ripgrep Tool] initializeIcons completed');
-  }
-
-  function setIcon(id, svg, fallbackText) {
-    const node = document.getElementById(id);
-    if (!node) return;
-    if (svg && svg.trim()) {
-      node.innerHTML = svg;
-    } else if (fallbackText) {
-      node.textContent = fallbackText;
-      node.style.fontSize = '12px';
-      node.style.fontWeight = 'bold';
-      node.style.display = 'inline-flex';
-      node.style.alignItems = 'center';
-      node.style.justifyContent = 'center';
-    }
-  }
 
   function t(key) {
     return translations[key] || key;
+  }
+
+  function formatMessage(key, values) {
+    return t(key).replace(/\{(\w+)\}/g, (_, name) => String(values[name] ?? ''));
   }
 
   function applyTranslations() {
@@ -275,7 +158,7 @@
     fileQueryEl.placeholder = t('file_query_placeholder');
     includeEl.placeholder = '';
     excludeEl.placeholder = '';
-    syncPasswordToggle();
+    settingsPanel.syncPasswordToggle();
     if (!resultsEl.innerHTML.trim()) {
       resultsEl.innerHTML = `<div class="empty">${escapeHtml(t('empty_results'))}</div>`;
     }
@@ -292,6 +175,32 @@
     workspacePath = value || '';
     workspaceNameEl.textContent = workspacePath;
     workspaceNameEl.title = workspacePath;
+    syncCurrentRemotePathDisplay();
+  }
+
+  function inferCurrentRemotePathFromInputs() {
+    const configured = remoteSearchPathInputEl.value.trim();
+    if (configured) return configured;
+    if (currentRemotePath) return currentRemotePath;
+    return workspacePath || '';
+  }
+
+  function syncCurrentRemotePathDisplay(value) {
+    currentRemotePath = value || inferCurrentRemotePathFromInputs();
+    if (!currentRemotePathValueEl) return;
+    currentRemotePathValueEl.textContent = currentRemotePath || '-';
+    currentRemotePathValueEl.title = currentRemotePath || '';
+  }
+
+  function isCurrentSearchMessage(payload) {
+    const requestId = Number(payload?.requestId || 0);
+    return !requestId || !activeSearchRequestId || requestId === activeSearchRequestId;
+  }
+
+  function beginSearchIntent() {
+    activeSearchRequestId = nextSearchRequestId;
+    nextSearchRequestId += 1;
+    return activeSearchRequestId;
   }
 
   function setGitRootState(ok, message) {
@@ -318,8 +227,8 @@
         toggle.classList.toggle('disabled', blocked);
       }
     });
-    if (blocked && settingsLayerEl.classList.contains('open')) {
-      closeSettings();
+    if (blocked && settingsPanel.isOpen()) {
+      settingsPanel.close();
     }
   }
 
@@ -342,6 +251,55 @@
     };
   }
 
+  function postSearchToExtension(options = {}) {
+    const {
+      clearFileCollapse = true,
+      rememberHistory = false,
+      triggerSource = 'input'
+    } = options;
+    enforceExclusiveSearchFields();
+    if (!gitRootOk) {
+      renderGitRootRequired(gitRootMessage || t('git_root_required'));
+      return;
+    }
+    currentOptions = getPayload();
+    if (rememberHistory) {
+      clearSearchHistoryCommit();
+      searchHistory.rememberActive();
+    }
+    if (clearFileCollapse) {
+      collapsedFiles.clear();
+    }
+    const requestId = activeSearchRequestId || beginSearchIntent();
+    currentResultMode = currentOptions.fileQuery && String(currentOptions.fileQuery).trim() ? 'file' : 'content';
+    lastPostedSearchKey = JSON.stringify(currentOptions);
+    prepareSearchUi(requestId, currentResultMode);
+    persistState();
+    traceWebview('search-post', {
+      requestId,
+      triggerSource,
+      mode: currentResultMode,
+      queryLength: String(currentOptions.query || '').length,
+      fileQueryLength: String(currentOptions.fileQuery || '').length
+    });
+    settingsPanel.close();
+    vscode.postMessage({
+      type: 'search',
+      payload: {
+        ...currentOptions,
+        requestId,
+        triggerSource
+      }
+    });
+  }
+
+  function startSearch() {
+    clearSearchDebounce();
+    clearSearchHistoryCommit();
+    beginSearchIntent();
+    postSearchToExtension({ clearFileCollapse: true, rememberHistory: true, triggerSource: 'enter' });
+  }
+
   function clearSearchDebounce() {
     if (searchDebounceTimer !== null) {
       clearTimeout(searchDebounceTimer);
@@ -349,124 +307,134 @@
     }
   }
 
-  function postSearchToExtension(clearFileCollapse) {
-    enforceExclusiveSearchFields();
-    if (!gitRootOk) {
-      renderGitRootRequired(gitRootMessage || t('git_root_required'));
+  function clearSearchHistoryCommit() {
+    if (searchHistoryCommitTimer !== null) {
+      clearTimeout(searchHistoryCommitTimer);
+      searchHistoryCommitTimer = null;
+    }
+    pendingHistoryKey = '';
+  }
+
+  function scheduleSearchHistoryCommit() {
+    clearSearchHistoryCommit();
+    const key = JSON.stringify(getPayload());
+    if (!String(queryEl.value).trim() && !String(fileQueryEl.value).trim()) {
       return;
     }
-    currentOptions = getPayload();
-    if (clearFileCollapse) {
-      collapsedFiles.clear();
-    }
-    persistState();
-    vscode.postMessage({ type: 'search', payload: currentOptions });
+    pendingHistoryKey = key;
+    searchHistoryCommitTimer = window.setTimeout(() => {
+      searchHistoryCommitTimer = null;
+      const currentKey = JSON.stringify(getPayload());
+      if (currentKey !== pendingHistoryKey) {
+        return;
+      }
+      searchHistory.rememberActive();
+      pendingHistoryKey = '';
+    }, SEARCH_HISTORY_STABLE_MS);
   }
 
-  function startSearch() {
+  function scheduleSearchRefresh(rememberHistory = true) {
     clearSearchDebounce();
-    postSearchToExtension(true);
-  }
-
-  function scheduleSearchRefresh() {
-    clearSearchDebounce();
+    beginSearchIntent();
     const q = String(queryEl.value).trim() || String(fileQueryEl.value).trim();
     if (!q) {
-      postSearchToExtension(false);
+      clearSearchHistoryCommit();
+      resultsRenderer.replace([]);
+      currentResultMode = String(fileQueryEl.value).trim() ? 'file' : 'content';
+      persistState();
+      vscode.postMessage({
+        type: 'search',
+        payload: {
+          ...getPayload(),
+          requestId: activeSearchRequestId,
+          triggerSource: 'input'
+        }
+      });
       return;
     }
     searchDebounceTimer = window.setTimeout(() => {
       searchDebounceTimer = null;
-      postSearchToExtension(false);
+      postSearchToExtension({ clearFileCollapse: true, rememberHistory, triggerSource: 'input' });
+      if (!rememberHistory) {
+        scheduleSearchHistoryCommit();
+      }
     }, SEARCH_INPUT_DEBOUNCE_MS);
   }
 
-  function getFileIconMarkup(relativePath) {
-    const extension = getExtension(relativePath);
-    const svg = fileTypeIcons[extension] || fileTypeIcons.default;
-    if (svg) {
-      return `<span class="fileIcon" aria-hidden="true"><span class="fileImg">${svg}</span></span>`;
-    }
-    const badge = fileTypeBadge[extension] || { label: 'F', color: '#8c8c8c' };
-    return `<span class="fileIcon" aria-hidden="true" style="background:${badge.color};color:#fff;font-size:7px;font-weight:700;border-radius:2px;display:inline-flex;align-items:center;justify-content:center;min-width:16px;min-height:16px;width:16px;height:16px;box-sizing:border-box;">${escapeHtml(badge.label)}</span>`;
-  }
-
-  function getExtension(relativePath) {
-    const parts = String(relativePath).toLowerCase().split('.');
-    return parts.length > 1 ? parts[parts.length - 1] : '';
-  }
-
-  function getFileNamePaletteIndex(index) {
-    return index % fileNamePaletteSize;
-  }
-
-  function renderResults(items) {
-    if (!gitRootOk) {
-      renderGitRootRequired(gitRootMessage || t('git_root_required'));
-      return;
-    }
-    const isFileSearch = currentOptions.fileQuery && String(currentOptions.fileQuery).trim();
-    if (!items.length) {
-      resultsEl.innerHTML = `<div class="empty">${escapeHtml(t('empty_results'))}</div>`;
-      persistState();
-      return;
-    }
-
-    resultsEl.innerHTML = items.map((file, index) => {
-      const parts = splitPath(file.relativePath);
-      const collapsed = !isFileSearch && collapsedFiles.has(file.path);
-      const chevron = collapsed
-        ? (icons.chevronRight || '&#9656;')
-        : (icons.chevronDown || '&#9662;');
-      const fileNameColorIndex = getFileNamePaletteIndex(index);
-      const matches = isFileSearch ? '' : file.matches.map((match) => {
-        const payload = encodeURIComponent(JSON.stringify(match));
-        return `<button class="match" type="button" data-match="${payload}">
-          <span class="preview">${formatPreview(match.preview, match)}</span>
-        </button>`;
-      }).join('');
-      const filePayload = encodeURIComponent(JSON.stringify(file.matches[0] || {
-        path: file.path,
-        line: 1,
-        column: 1,
-        endColumn: 2,
-        preview: file.relativePath
-      }));
-
-      return `<section class="file ${collapsed ? 'collapsed' : ''} ${isFileSearch ? 'fileSearchResult' : ''}">
-        <button class="fileHeader" type="button" ${isFileSearch ? `data-match="${filePayload}"` : `data-toggle-file="${encodeURIComponent(file.path)}"`}>
-          <span class="treeIcon" aria-hidden="true">${chevron}</span>
-          ${getFileIconMarkup(file.relativePath)}
-          <span class="fileName fileNameColor${fileNameColorIndex}">
-            <span class="base">${escapeHtml(parts.name)}</span>
-            <span class="dir">${escapeHtml(parts.dir)}</span>
-          </span>
-          <span class="badge">${isFileSearch ? '' : file.count}</span>
-        </button>
-        <div class="matches">${matches}</div>
-      </section>`;
-    }).join('');
-
+  function searchRestoredQueryAfterConnection() {
+    if (!gitRootOk) return;
+    const q = String(queryEl.value).trim() || String(fileQueryEl.value).trim();
+    if (!q) return;
+    const key = JSON.stringify(getPayload());
+    if (key === lastConnectionSearchKey || key === lastPostedSearchKey) return;
+    lastConnectionSearchKey = key;
+    clearSearchDebounce();
+    clearSearchHistoryCommit();
+    beginSearchIntent();
+    currentOptions = getPayload();
+    currentResultMode = currentOptions.fileQuery && String(currentOptions.fileQuery).trim() ? 'file' : 'content';
+    prepareSearchUi(activeSearchRequestId, currentResultMode);
     persistState();
+    vscode.postMessage({
+      type: 'search',
+      payload: {
+        ...getPayload(),
+        requestId: activeSearchRequestId,
+        triggerSource: 'connection'
+      }
+    });
   }
+
+  const resultsRenderer = new window.RipgrepToolResultsRenderer({
+    resultsEl,
+    collapsedFiles,
+    isGitRootOk: () => gitRootOk,
+    getGitRootMessage: () => gitRootMessage || t('git_root_required'),
+    getIsFileSearch: () => currentResultMode === 'file',
+    renderGitRootRequired,
+    renderEmpty: () => `<div class="empty">${escapeHtml(t('empty_results'))}</div>`,
+    renderFileIcon: (relativePath) => iconRegistry.renderFileIcon(relativePath),
+    formatPreview,
+    escapeHtml,
+    persistState,
+    trace: (phase, details) => traceWebview(`render:${phase}`, details),
+    getChevronRight: () => iconRegistry.get('chevronRight') || '&#9656;',
+    getChevronDown: () => iconRegistry.get('chevronDown') || '&#9662;',
+    afterRender: updateRenderTiming
+  });
+
+  const settingsPanel = new window.RipgrepToolSettingsPanel({
+    elements: {
+      layer: settingsLayerEl,
+      remoteHost: remoteHostInputEl,
+      remotePort: remotePortInputEl,
+      remoteUsername: remoteUsernameInputEl,
+      remotePassword: remotePasswordInputEl,
+      remoteSearchPath: remoteSearchPathInputEl,
+      includeGlobs: includeGlobsInputEl,
+      excludeGlobs: excludeGlobsInputEl,
+      connectionStatus: connectionStatusEl,
+      togglePasswordButton: togglePasswordButtonEl
+    },
+    defaultRemotePort,
+    defaultIncludeGlobs,
+    defaultExcludeGlobs,
+    getCurrentSettings: () => currentSettings,
+    translate: t,
+    renderBlocked: () => renderGitRootRequired(gitRootMessage || t('git_root_required')),
+    isGitRootOk: () => gitRootOk,
+    persistState,
+    syncCurrentRemotePathDisplay,
+    setIcon: (id, svg, fallbackText) => iconRegistry.setIcon(id, svg, fallbackText),
+    getEyeIcon: () => iconRegistry.get('eye'),
+    getEyeClosedIcon: () => iconRegistry.get('eyeClosed')
+  });
 
   function escapeHtml(value) {
     return String(value)
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;');
-  }
-
-  function splitPath(relativePath) {
-    const normalized = String(relativePath).replace(/\\/g, '/');
-    const index = normalized.lastIndexOf('/');
-    if (index === -1) {
-      return { name: normalized, dir: '' };
-    }
-    return {
-      name: normalized.slice(index + 1),
-      dir: normalized.slice(0, index)
-    };
   }
 
   function escapeRegExp(value) {
@@ -495,14 +463,27 @@
   function createSnippet(text, match) {
     if (!text) return '';
     const collapsed = String(text).replace(/\s+/g, ' ').trim();
-    const pivot = Math.max(0, Math.min(collapsed.length, match.column - 1));
-    const start = Math.max(0, pivot - 36);
-    const end = Math.min(collapsed.length, pivot + 110);
+    if (!collapsed) return '';
+    if (collapsed.length <= 260) return collapsed;
+    const symbol = String(match?.symbolName || '').trim();
+    const symbolIndex = symbol ? collapsed.indexOf(symbol) : -1;
+    const pivot = symbolIndex >= 0 ? symbolIndex : Math.floor(collapsed.length / 2);
+    const start = Math.max(0, pivot - 80);
+    const end = Math.min(collapsed.length, pivot + Math.max(160, symbol.length));
     return `${start > 0 ? '...' : ''}${collapsed.slice(start, end).trim()}${end < collapsed.length ? '...' : ''}`;
   }
 
+  function createPreviewFallback(match) {
+    const path = String(match?.relativePath || match?.path || '').trim();
+    const line = Number.isFinite(match?.line) ? match.line : undefined;
+    if (path && line) return `${path}:${line}`;
+    if (path) return path;
+    if (line) return `:${line}`;
+    return '';
+  }
+
   function formatPreview(preview, match) {
-    const snippet = createSnippet(preview, match);
+    const snippet = createSnippet(preview, match) || createPreviewFallback(match);
     const safePreview = escapeHtml(snippet);
     const regex = buildHighlightRegex();
     if (!regex) return safePreview;
@@ -525,15 +506,91 @@
     return result;
   }
 
-  function syncToggleState(searchOnQuery = true) {
+  function updateRenderTiming(info) {
+    lastRenderTimingInfo = info || null;
+    traceWebview('render-complete', info || {});
+    applyRenderTiming();
+  }
+
+  function prepareSearchUi(requestId, mode) {
+    lastSearchSummaryText = '';
+    lastRenderTimingInfo = null;
+    progressInfo = {
+      requestId,
+      mode,
+      startedAt: Date.now(),
+      fileCount: 0,
+      matchCount: 0,
+      running: true
+    };
+    resultsRenderer.replace([]);
+    updateProgressSummary();
+    startProgressTimer();
+  }
+
+  function startProgressTimer() {
+    stopProgressTimer();
+    progressTimer = window.setInterval(updateProgressSummary, 250);
+  }
+
+  function stopProgressTimer() {
+    if (progressTimer !== null) {
+      clearInterval(progressTimer);
+      progressTimer = null;
+    }
+  }
+
+  function updateProgressSummary() {
+    if (!progressInfo || !progressInfo.running) {
+      return;
+    }
+    const elapsedMs = Math.max(0, Date.now() - progressInfo.startedAt);
+    if (progressInfo.mode === 'file') {
+      summaryTextEl.textContent = `${progressInfo.fileCount} files (${elapsedMs} ms)`;
+    } else {
+      summaryTextEl.textContent = `${progressInfo.fileCount} files, ${progressInfo.matchCount} results (${elapsedMs} ms)`;
+    }
+  }
+
+  function applyProgressState(statePayload) {
+    if (statePayload.error || !statePayload.running) {
+      if (progressInfo) {
+        progressInfo.running = false;
+      }
+      stopProgressTimer();
+      return;
+    }
+    progressInfo = {
+      requestId: Number(statePayload.requestId || activeSearchRequestId),
+      mode: currentResultMode,
+      startedAt: Date.now() - Number(statePayload.elapsedMs || 0),
+      fileCount: Number(statePayload.fileCount || 0),
+      matchCount: Number(statePayload.matchCount || 0),
+      running: true
+    };
+    updateProgressSummary();
+    startProgressTimer();
+  }
+
+  function applyRenderTiming() {
+    if (!lastSearchSummaryText || !lastRenderTimingInfo || lastRenderTimingInfo.elapsedMs < 80) {
+      return;
+    }
+    summaryTextEl.textContent = `${lastSearchSummaryText} · ${formatMessage('render_timing', { elapsedMs: lastRenderTimingInfo.elapsedMs })}`;
+    persistState();
+  }
+
+  function syncToggleState() {
     for (const [toggle, input] of togglePairs) {
       toggle.classList.toggle('active', input.checked);
     }
     syncDefinitionRootClass();
     persistState();
-    if (searchOnQuery && (String(queryEl.value).trim() || String(fileQueryEl.value).trim())) {
+    if (String(queryEl.value).trim() || String(fileQueryEl.value).trim()) {
       clearSearchDebounce();
-      postSearchToExtension(true);
+      clearSearchHistoryCommit();
+      beginSearchIntent();
+      postSearchToExtension({ clearFileCollapse: true, rememberHistory: true, triggerSource: 'toggle' });
     }
   }
 
@@ -557,56 +614,29 @@
       useRegex: useRegexEl.checked,
       definitionMode: definitionModeEl.checked,
       collapsedFiles: Array.from(collapsedFiles),
+      ...searchHistory.snapshot(),
       summaryText: summaryTextEl.textContent || '',
       workspaceName: workspaceNameEl.textContent || '',
       workspacePath,
-      resultsHtml: resultsEl.innerHTML
+      currentRemotePath,
+      activeSearchRequestId,
+      nextSearchRequestId
     });
   }
 
-  function openSettings() {
-    if (!gitRootOk) {
-      renderGitRootRequired(gitRootMessage || t('git_root_required'));
+  function traceWebview(event, details) {
+    const now = Date.now();
+    const payload = {
+      event,
+      at: now,
+      requestId: activeSearchRequestId,
+      details: details || {}
+    };
+    if (event.startsWith('render:') && now - lastTraceAt < 500 && Number(payload.details.elapsedMs || 0) < 200) {
       return;
     }
-    remoteHostInputEl.value = currentSettings.remoteHost || '';
-    remotePortInputEl.value = String(currentSettings.remotePort || defaultRemotePort);
-    remoteUsernameInputEl.value = currentSettings.remoteUsername || '';
-    remotePasswordInputEl.value = currentSettings.remotePassword || '';
-    remoteSearchPathInputEl.value = currentSettings.remoteSearchPath || '';
-    includeGlobsInputEl.value = currentSettings.includeGlobs.join('\n');
-    excludeGlobsInputEl.value = currentSettings.excludeGlobs.join('\n');
-    connectionStatusEl.textContent = '';
-    settingsLayerEl.classList.add('open');
-    remoteHostInputEl.focus();
-  }
-
-  function closeSettings() {
-    settingsLayerEl.classList.remove('open');
-    persistState();
-  }
-
-  function syncPasswordToggle() {
-    togglePasswordButtonEl.title = remotePasswordInputEl.type === 'password' ? t('show_password') : t('hide_password');
-    setIcon(
-      'togglePasswordIcon',
-      remotePasswordInputEl.type === 'password'
-        ? (icons.eye || '')
-        : (icons.eyeClosed || '')
-    );
-  }
-
-  function buildSettingsPayload() {
-    const remotePort = Number.parseInt(remotePortInputEl.value, 10);
-    return {
-      remoteHost: remoteHostInputEl.value.trim(),
-      remotePort: Number.isFinite(remotePort) ? remotePort : defaultRemotePort,
-      remoteUsername: remoteUsernameInputEl.value.trim(),
-      remotePassword: remotePasswordInputEl.value,
-      remoteSearchPath: remoteSearchPathInputEl.value.trim(),
-      includeGlobs: includeGlobsInputEl.value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean),
-      excludeGlobs: excludeGlobsInputEl.value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
-    };
+    lastTraceAt = now;
+    vscode.postMessage({ type: 'trace', payload });
   }
 
   function saveSettings() {
@@ -614,20 +644,27 @@
       renderGitRootRequired(gitRootMessage || t('git_root_required'));
       return;
     }
-    vscode.postMessage({ type: 'saveSettings', payload: buildSettingsPayload() });
-    closeSettings();
-    if (String(queryEl.value).trim() || String(fileQueryEl.value).trim()) {
-      scheduleSearchRefresh();
-    }
+    vscode.postMessage({ type: 'saveSettings', payload: settingsPanel.buildPayload() });
+    settingsPanel.close();
   }
 
   queryEl.addEventListener('keydown', (event) => {
     if (!gitRootOk) return;
     if (event.key === 'Enter') startSearch();
+    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      if (searchHistory.navigate(queryEl, event.key === 'ArrowUp' ? -1 : 1)) {
+        event.preventDefault();
+      }
+    }
   });
   fileQueryEl.addEventListener('keydown', (event) => {
     if (!gitRootOk) return;
     if (event.key === 'Enter') startSearch();
+    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      if (searchHistory.navigate(fileQueryEl, event.key === 'ArrowUp' ? -1 : 1)) {
+        event.preventDefault();
+      }
+    }
   });
   includeEl.addEventListener('keydown', (event) => {
     if (!gitRootOk) return;
@@ -650,50 +687,47 @@
     if (queryEl.value) {
       fileQueryEl.value = '';
     }
+    searchHistory.resetCursor(queryEl);
     persistState();
-    scheduleSearchRefresh();
+    clearSearchHistoryCommit();
+    scheduleSearchRefresh(false);
   });
   fileQueryEl.addEventListener('input', () => {
     if (!gitRootOk) return;
     if (fileQueryEl.value) {
       queryEl.value = '';
     }
+    searchHistory.resetCursor(fileQueryEl);
     persistState();
-    scheduleSearchRefresh();
+    clearSearchHistoryCommit();
+    scheduleSearchRefresh(false);
   });
   includeEl.addEventListener('input', () => {
     if (!gitRootOk) return;
     persistState();
-    scheduleSearchRefresh();
+    clearSearchHistoryCommit();
+    scheduleSearchRefresh(false);
   });
   excludeEl.addEventListener('input', () => {
     if (!gitRootOk) return;
     persistState();
-    scheduleSearchRefresh();
+    clearSearchHistoryCommit();
+    scheduleSearchRefresh(false);
   });
-  settingsButton.addEventListener('click', openSettings);
-  closeSettingsButtonEl.addEventListener('click', closeSettings);
-  resetSettingsButtonEl.addEventListener('click', () => {
-    if (!gitRootOk) {
-      renderGitRootRequired(gitRootMessage || t('git_root_required'));
-      return;
-    }
-    remoteHostInputEl.value = '';
-    remotePortInputEl.value = String(defaultRemotePort);
-    remoteUsernameInputEl.value = '';
-    remotePasswordInputEl.value = '';
-    remoteSearchPathInputEl.value = '';
-    includeGlobsInputEl.value = defaultIncludeGlobs.join('\n');
-    excludeGlobsInputEl.value = defaultExcludeGlobs.join('\n');
-    connectionStatusEl.textContent = '';
+  settingsButton.addEventListener('click', () => settingsPanel.open());
+  closeSettingsButtonEl.addEventListener('click', () => settingsPanel.close());
+  resetSettingsButtonEl.addEventListener('click', () => settingsPanel.reset());
+  remoteSearchPathInputEl.addEventListener('input', () => {
+    syncCurrentRemotePathDisplay(remoteSearchPathInputEl.value.trim());
+    persistState();
   });
   connectButtonEl.addEventListener('click', () => {
     if (!gitRootOk) {
       renderGitRootRequired(gitRootMessage || t('git_root_required'));
       return;
     }
-    connectionStatusEl.textContent = t('connection_connecting');
-    vscode.postMessage({ type: 'connect', payload: buildSettingsPayload() });
+    settingsPanel.setConnectionStatus(t('connection_connecting'));
+    vscode.postMessage({ type: 'connect', payload: settingsPanel.buildPayload() });
   });
   saveSettingsButtonEl.addEventListener('click', saveSettings);
   if (rebuildTagsButtonEl) {
@@ -707,35 +741,73 @@
   }
   togglePasswordButtonEl.addEventListener('click', () => {
     if (!gitRootOk) return;
-    remotePasswordInputEl.type = remotePasswordInputEl.type === 'password' ? 'text' : 'password';
-    syncPasswordToggle();
+    settingsPanel.togglePassword();
   });
   settingsLayerEl.addEventListener('click', (event) => {
-    if (event.target === settingsLayerEl) closeSettings();
+    if (event.target === settingsLayerEl) settingsPanel.close();
   });
   window.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && settingsLayerEl.classList.contains('open')) closeSettings();
+    if (event.key === 'Escape' && settingsPanel.isOpen()) settingsPanel.close();
   });
-  resultsEl.addEventListener('click', (event) => {
+  function handleResultAction(event, source) {
     if (!gitRootOk) {
       renderGitRootRequired(gitRootMessage || t('git_root_required'));
       return;
     }
     const toggleTarget = event.target.closest('[data-toggle-file]');
     if (toggleTarget) {
+      event.preventDefault();
+      event.stopPropagation();
       const filePath = decodeURIComponent(toggleTarget.dataset.toggleFile);
+      if (isDuplicateResultAction(`toggle:${filePath}`, source)) {
+        return;
+      }
       if (collapsedFiles.has(filePath)) collapsedFiles.delete(filePath);
       else collapsedFiles.add(filePath);
-      const fileEl = toggleTarget.closest('.file');
-      fileEl.classList.toggle('collapsed', collapsedFiles.has(filePath));
-      toggleTarget.querySelector('.treeIcon').innerHTML = collapsedFiles.has(filePath) ? icons.chevronRight : icons.chevronDown;
+      resultsRenderer.rerender();
       persistState();
       return;
     }
     const matchTarget = event.target.closest('[data-match]');
     if (!matchTarget) return;
-    const payload = JSON.parse(decodeURIComponent(matchTarget.dataset.match));
-    vscode.postMessage({ type: 'open', payload });
+    event.preventDefault();
+    event.stopPropagation();
+    try {
+      const payload = JSON.parse(decodeURIComponent(matchTarget.dataset.match));
+      const key = `open:${payload.uri || payload.path || ''}:${payload.line || 0}:${payload.column || 0}`;
+      if (isDuplicateResultAction(key, source)) {
+        return;
+      }
+      traceWebview('result-open', {
+        source,
+        uri: payload.uri || '',
+        path: payload.path || '',
+        line: payload.line || 0
+      });
+      vscode.postMessage({ type: 'open', payload });
+    } catch (error) {
+      traceWebview('result-click-failed', { message: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  function isDuplicateResultAction(key, source) {
+    const now = Date.now();
+    if (source === 'click' && lastResultAction.key === key && now - lastResultAction.at < 800) {
+      return true;
+    }
+    lastResultAction = { key, at: now };
+    return false;
+  }
+
+  resultsEl.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0) {
+      return;
+    }
+    handleResultAction(event, 'pointerdown');
+  }, true);
+
+  resultsEl.addEventListener('click', (event) => {
+    handleResultAction(event, 'click');
   });
 
   window.addEventListener('message', (event) => {
@@ -751,7 +823,8 @@
         summaryTextEl.textContent = message.payload.state.error || message.payload.state.summary || '';
       }
       if (message.payload.results) {
-        renderResults(message.payload.results.items || []);
+        currentResultMode = message.payload.results.mode || currentResultMode;
+        resultsRenderer.replace(message.payload.results.items || []);
       }
       persistState();
       return;
@@ -763,28 +836,66 @@
       return;
     }
     if (message.type === 'state') {
-      summaryTextEl.textContent = message.error || message.summary || '';
+      const statePayload = message.payload || message;
+      if (!isCurrentSearchMessage(statePayload)) {
+        return;
+      }
+      summaryTextEl.textContent = statePayload.error || statePayload.summary || '';
+      if (statePayload.running || statePayload.error) {
+        lastSearchSummaryText = '';
+        lastRenderTimingInfo = null;
+      }
+      applyProgressState(statePayload);
+      if (statePayload.summary && !statePayload.running && !statePayload.error) {
+        lastSearchSummaryText = statePayload.summary;
+        applyRenderTiming();
+      }
       if (ctagsProgressRowEl) {
-        ctagsProgressRowEl.hidden = !message.ctagsInProgress;
+        ctagsProgressRowEl.hidden = !statePayload.ctagsInProgress;
         const track = ctagsProgressRowEl.querySelector('.ctagsProgressTrack');
         if (track) {
-          track.setAttribute('aria-label', message.summary || message.error || '');
+          track.setAttribute('aria-label', statePayload.summary || statePayload.error || '');
         }
       }
       persistState();
     }
     if (message.type === 'results') {
-      if (message.mode) {
-        currentOptions = getPayload();
+      const resultsPayload = message.payload || message;
+      if (!isCurrentSearchMessage(resultsPayload)) {
+        return;
       }
-      renderResults(message.items);
+      if (resultsPayload.mode) {
+        currentResultMode = resultsPayload.mode;
+      }
+      if (settingsPanel.isOpen()) {
+        settingsPanel.close();
+      }
+      traceWebview('results-received', {
+        mode: currentResultMode,
+        replace: resultsPayload.replace !== false,
+        files: Array.isArray(resultsPayload.items) ? resultsPayload.items.length : 0
+      });
+      if (resultsPayload.replace !== false) {
+        resultsRenderer.replace(resultsPayload.items || []);
+      } else {
+        resultsRenderer.merge(resultsPayload.items || []);
+      }
     }
     if (message.type === 'settings') currentSettings = message.payload;
-    if (message.type === 'connectionResult') connectionStatusEl.textContent = message.payload.message || '';
+    if (message.type === 'connectionResult') {
+      settingsPanel.setConnectionStatus(message.payload.message || '');
+      if (message.payload.cwd) {
+        syncCurrentRemotePathDisplay(message.payload.cwd);
+      }
+      persistState();
+      if (message.payload.ok) {
+        searchRestoredQueryAfterConnection();
+      }
+    }
   });
 
   syncToggleState(false);
-  syncPasswordToggle();
+  settingsPanel.syncPasswordToggle();
   setFieldFocus(includeEl, false);
   setFieldFocus(excludeEl, false);
   vscode.postMessage({ type: 'ready' });

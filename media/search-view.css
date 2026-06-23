@@ -38,7 +38,8 @@
   --view-edge-inset: 1px;
   --file-type-icon-size: 16px;
   --file-header-icon-col: 20px;
-  --file-row-icon-offset: calc(16px + 2px);
+  --file-row-guide-width: 16px;
+  --file-row-icon-offset: calc(var(--file-row-guide-width) + var(--file-header-icon-col) + 8px);
   --file-tree-inline: 6px;
   --file-tree-stroke: var(--vscode-tree-inactiveIndentGuidesStroke, var(--vscode-tree-indentGuidesStroke, var(--border)));
 }
@@ -305,6 +306,14 @@ textarea:focus-visible,
   text-overflow: ellipsis;
 }
 
+.summaryMeta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  color: var(--muted);
+}
+
 .results {
   display: block;
   min-height: 0;
@@ -312,6 +321,7 @@ textarea:focus-visible,
   padding: 0 0 2px 0;
   overflow-y: auto;
   overflow-x: hidden;
+  overflow-anchor: none;
 }
 
 .results::-webkit-scrollbar {
@@ -336,6 +346,32 @@ textarea:focus-visible,
   scrollbar-width: thin;
 }
 
+.virtualResults {
+  display: block;
+  min-width: 0;
+  overflow-anchor: none;
+}
+
+.virtualRows {
+  display: block;
+  min-width: 0;
+  overflow-anchor: none;
+}
+
+.virtualSpacerTop,
+.virtualSpacerBottom {
+  display: block;
+  min-height: 0;
+  overflow: hidden;
+  flex: none;
+}
+
+.fileVirtualRow,
+.virtualMatchRow {
+  height: var(--search-list-line);
+  min-height: var(--search-list-line);
+}
+
 .empty {
   padding: 2px var(--view-edge-inset) 6px;
   color: var(--search-messages-fg);
@@ -356,7 +392,7 @@ textarea:focus-visible,
 
 .fileHeader {
   display: grid;
-  grid-template-columns: 16px var(--file-header-icon-col) minmax(0, 1fr) auto;
+  grid-template-columns: var(--file-row-guide-width) var(--file-header-icon-col) minmax(0, 1fr) auto;
   align-items: center;
   gap: 4px;
   width: 100%;
@@ -380,7 +416,7 @@ textarea:focus-visible,
 }
 
 .fileSearchResult .fileHeader {
-  grid-template-columns: 16px var(--file-header-icon-col) minmax(0, 1fr) 0;
+  grid-template-columns: var(--file-row-guide-width) var(--file-header-icon-col) minmax(0, 1fr) 0;
 }
 
 .fileSearchResult .treeIcon {
@@ -571,6 +607,32 @@ textarea:focus-visible,
   padding-bottom: 2px;
 }
 
+.virtualMatchRow {
+  display: grid;
+  grid-template-columns: var(--file-row-guide-width) var(--file-header-icon-col) minmax(0, 1fr);
+  align-items: center;
+  gap: 4px;
+}
+
+.matchTreeSpacer {
+  position: relative;
+  display: block;
+  grid-column: 1 / span 2;
+  width: 100%;
+  height: var(--search-list-line);
+}
+
+.matchTreeSpacer::before {
+  content: "";
+  position: absolute;
+  left: var(--file-tree-inline);
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--file-tree-stroke);
+  opacity: 0.9;
+}
+
 /* Tree-style guide: vertical line under the chevron column, through match rows (Explorer-like) */
 .file:not(.collapsed) .matches::before {
   content: "";
@@ -596,7 +658,6 @@ textarea:focus-visible,
 }
 
 .match {
-  display: block;
   width: 100%;
   min-height: var(--search-list-line);
   line-height: var(--search-list-line);
@@ -640,6 +701,7 @@ mark {
 .modalLayer {
   position: fixed;
   inset: 0;
+  z-index: 50;
   display: none;
   align-items: center;
   justify-content: center;
@@ -806,7 +868,7 @@ mark {
 }
 
 .fieldFull {
-  grid-column: span 7;
+  grid-column: 1 / -1;
 }
 
 .fieldGroup {
@@ -892,6 +954,19 @@ mark {
   color: var(--fg);
 }
 
+.pathDisplay {
+  min-height: 28px;
+  padding: 5px 8px;
+  border: 1px solid color-mix(in srgb, var(--input-border, var(--border)) 70%, transparent);
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--input-bg) 72%, transparent);
+  color: var(--vscode-textLink-foreground, var(--fg));
+  font: 12px/1.4 var(--vscode-font-family);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .settingsTextarea {
   display: block;
   width: 100%;
@@ -952,8 +1027,8 @@ mark {
 
 .modalFooter {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
+  align-items: start;
   flex-shrink: 0;
   gap: 8px 12px;
   padding: 10px 12px 10px 16px;
@@ -961,17 +1036,10 @@ mark {
   background: var(--vscode-sideBarTitle-background, var(--modal-bg));
 }
 
-.modalFooterSecondary {
-  grid-column: 1;
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 8px;
-}
-
 .modalStatus {
-  grid-column: 1 / -1;
+  grid-column: 1;
   min-width: 0;
+  min-height: 56px;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.4;
@@ -980,17 +1048,16 @@ mark {
 }
 
 .modalFooterActions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: flex-end;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: stretch;
   gap: 8px;
   grid-column: 2;
-  grid-row: 2;
 }
 
 .textButton {
-  min-width: 64px;
+  width: 100%;
+  min-width: 0;
   height: 26px;
   padding: 0 11px;
   border: 1px solid var(--vscode-button-border, var(--border));
@@ -1050,13 +1117,11 @@ mark {
     grid-template-columns: 1fr;
   }
 
-  .modalFooterSecondary,
   .modalFooterActions {
     grid-column: 1;
   }
 
   .modalFooterActions {
-    grid-row: auto;
-    justify-content: flex-start;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
