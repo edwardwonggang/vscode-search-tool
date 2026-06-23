@@ -64,7 +64,9 @@
 
     <div class="summary">
       <div id="summaryText"></div>
-      <div id="workspaceName"></div>
+      <div class="summaryMeta">
+        <span id="workspaceName"></span>
+      </div>
     </div>
 
     <div class="results" id="results">
@@ -118,6 +120,10 @@
                 data-i18n-placeholder="remote_search_path_placeholder"
               />
             </div>
+            <div class="fieldGroup fieldFull">
+              <div class="fieldLabel" data-i18n="current_remote_path_label"></div>
+              <div id="currentRemotePathValue" class="pathDisplay"></div>
+            </div>
           </div>
         </section>
 
@@ -140,10 +146,8 @@
 
       <div class="modalFooter">
         <div id="connectionStatus" class="modalStatus"></div>
-        <div class="modalFooterSecondary">
-          <button id="rebuildTagsButton" class="textButton" type="button" data-i18n="rebuild_tags_button"></button>
-        </div>
         <div class="modalFooterActions">
+          <button id="rebuildTagsButton" class="textButton" type="button" data-i18n="rebuild_tags_button"></button>
           <button id="connectButton" class="textButton" type="button" data-i18n="connect_button"></button>
           <button id="resetSettingsButton" class="textButton" type="button" data-i18n="reset_button"></button>
           <button id="saveSettingsButton" class="textButton primary" type="button" data-i18n="save_button"></button>
@@ -154,12 +158,17 @@
 
   <script nonce="__NONCE__">
     window.RIPGREP_TOOL_BOOTSTRAP = {
+      extensionVersion: __EXTENSION_VERSION__,
       defaultRemotePort: __DEFAULT_REMOTE_PORT__,
       defaultIncludeGlobs: __DEFAULT_INCLUDE_GLOBS__,
       defaultExcludeGlobs: __DEFAULT_EXCLUDE_GLOBS__,
       iconUris: __ICON_URIS__
     };
   </script>
+  <script nonce="__NONCE__" src="__RESULTS_RENDERER_JS_URI__"></script>
+  <script nonce="__NONCE__" src="__SEARCH_HISTORY_JS_URI__"></script>
+  <script nonce="__NONCE__" src="__SETTINGS_PANEL_JS_URI__"></script>
+  <script nonce="__NONCE__" src="__ICONS_JS_URI__"></script>
   <script nonce="__NONCE__" src="__JS_URI__"></script>
 </body>
 </html>

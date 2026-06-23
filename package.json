@@ -2,7 +2,7 @@
   "name": "ripgreptool",
   "displayName": "Ripgrep Tool",
   "description": "Remote ripgrep search in the sidebar. Limits and setup are in the README (extension details), not in the in-editor UI.",
-  "version": "0.0.12",
+  "version": "0.0.63",
   "publisher": "local",
   "license": "UNLICENSED",
   "engines": {
@@ -54,12 +54,6 @@
           "default": "rg",
           "description": "Path to the ripgrep binary."
         },
-        "ripgrepTool.maxResults": {
-          "type": "number",
-          "default": 0,
-          "minimum": 0,
-          "description": "Max match lines per file (ripgrep --max-count). Use 0 to omit the flag and apply no per-file cap. Not a time or total-file limit; search runs until ripgrep finishes."
-        },
         "ripgrepTool.contextLines": {
           "type": "number",
           "default": 0,
@@ -92,6 +86,9 @@
   "scripts": {
     "build": "tsc -p ./ --noEmit && node scripts/bundle-extension.mjs",
     "package": "npm run build && npx @vscode/vsce package --no-dependencies --allow-missing-repository",
+    "context": "C:\\Users\\10297441.WIN-9DOP5T7GHM7\\.codex\\tools\\context-pack\\context-pack.cmd",
+    "context:changed": "C:\\Users\\10297441.WIN-9DOP5T7GHM7\\.codex\\tools\\context-pack\\context-pack.cmd --changed",
+    "test": "tsc -p tsconfig.test.json && node --test out-test/tests/core.test.js",
     "update": "node scripts/update-extension.mjs",
     "watch": "tsc -w -p ./"
   },

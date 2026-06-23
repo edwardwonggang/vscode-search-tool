@@ -77,8 +77,10 @@ function discoverDefaultTargets() {
   const seen = new Set(found.map(normalizeTargetKey));
   for (const command of commonWindowsEditorPaths) {
     if (existsSync(command) && !seen.has(normalizeTargetKey(command))) {
-      found.push(command);
-      seen.add(normalizeTargetKey(command));
+      if (!/[ ]/.test(command) || isCommandAvailable(basename(command, '.cmd'))) {
+        found.push(command);
+        seen.add(normalizeTargetKey(command));
+      }
     }
   }
   return found.length > 0 ? found : defaultEditorCommands;
@@ -97,9 +99,10 @@ function normalizeTargetKey(command) {
 }
 
 function run(command, args) {
-  execFileSync(command, args, {
-    cwd: root,
-    stdio: 'inherit',
-    shell: process.platform === 'win32'
-  });
+  if (process.platform === 'win32') {
+    const cmdArgs = ['/c', command, ...args];
+    execFileSync('cmd', cmdArgs, { cwd: root, stdio: 'inherit' });
+  } else {
+    execFileSync(command, args, { cwd: root, stdio: 'inherit' });
+  }
 }
