@@ -334,7 +334,11 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
         excludeGlobs: normalized.excludeGlobs
       });
     }
-    this.services.messageRouter.postMessage({ type: 'settings', payload: normalized } as any);
+    const inferredForMessage = this.inferProjectRemotePath(normalized.remoteUsername, workspaceFolder);
+    this.services.messageRouter.postMessage({
+      type: 'settings',
+      payload: { ...normalized, inferredRemoteSearchPath: inferredForMessage || '' }
+    } as any);
     this.services.messageRouter.postState({ type: 'state', running: false, summary: 'Settings saved' });
     void this.autoConnectIfReady('settings saved');
   }
@@ -354,9 +358,10 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     });
     return {
       ...ssh,
-      remoteSearchPath: normalizedProject.remoteSearchPath || inferredPath || '',
+      remoteSearchPath: normalizedProject.remoteSearchPath,
       includeGlobs: normalizedProject.includeGlobs,
-      excludeGlobs: normalizedProject.excludeGlobs
+      excludeGlobs: normalizedProject.excludeGlobs,
+      inferredRemoteSearchPath: inferredPath || ''
     };
   }
 
