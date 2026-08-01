@@ -22,6 +22,7 @@ const DEFINITION_KINDS = new Set([
   'e', 'enumerator',
   't', 'typedef',
   'u', 'union',
+  'v', 'variable',
   'x', 'extern'
 ]);
 

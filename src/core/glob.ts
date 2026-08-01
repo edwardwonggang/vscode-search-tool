@@ -33,6 +33,26 @@ export function createResultPathFilter(
   };
 }
 
+/**
+ * 定义搜索专用过滤：在普通 include/exclude 基础上追加定义搜索默认排除项。
+ */
+export function createDefinitionResultPathFilter(
+  options: SearchOptions,
+  settings: SearchSettings,
+  definitionExcludeGlobs: string[]
+): (relativePath: string) => boolean {
+  const baseFilter = createResultPathFilter(options, settings);
+  const normalizedExcludes = definitionExcludeGlobs
+    .map(normalizeExcludeGlobForSearch)
+    .filter(Boolean);
+  return (relativePath: string): boolean => {
+    if (!baseFilter(relativePath)) {
+      return false;
+    }
+    return !normalizedExcludes.some((glob) => matchSearchGlob(relativePath, glob));
+  };
+}
+
 export function normalizeExcludeGlobForSearch(glob: string): string {
   const trimmed = String(glob).trim();
   if (!trimmed) {

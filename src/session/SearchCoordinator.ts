@@ -1,13 +1,13 @@
 import * as vscode from 'vscode';
-import type { SearchOptions, SearchSettings } from '../core/types';
-import type { SearchResultStore } from '../search/SearchResultStore';
-import type { WebviewMessageRouter } from '../search/WebviewMessageRouter';
+import type { SearchMatch, SearchOptions, SearchSettings } from '../core/types';
+import { SearchResultStore } from '../search/SearchResultStore';
+import { WebviewMessageRouter } from '../search/WebviewMessageRouter';
 import type { ConnectionController } from './ConnectionController';
 import type { WorkspaceResolver } from '../workspace/WorkspaceResolver';
 import type { TranslationService } from '../i18n/TranslationService';
 import type { RemoteExecutor } from '../remote/RemoteExecutor';
 import type { RemoteToolInstaller } from '../remote/RemoteToolInstaller';
-import type { SearchSession } from './SearchSession';
+import { SearchSession } from './SearchSession';
 import type { SessionLogger } from './SessionLogger';
 import { ContentSearchRunner, type ContentSearchConfig } from './ContentSearchRunner';
 import { FileSearchRunner, type FileSearchConfig } from './FileSearchRunner';
@@ -159,6 +159,71 @@ export class SearchCoordinator {
     messageRouter: WebviewMessageRouter
   ): Promise<void> {
     await this.tagsRebuild.execute(settings, workspaceFolder, repositories, messageRouter);
+  }
+
+  /**
+   * 右键“转到定义”使用的独立定义查找：隔离会话与结果存储，不干扰侧边栏搜索。
+   * 返回跨 Git 根合并后的匹配，已应用定义搜索默认排除项。
+   */
+  public async lookupDefinitions(
+    symbol: string,
+    settings: SearchSettings,
+    workspaceFolder: vscode.WorkspaceFolder,
+    repositories: SearchRepository[]
+  ): Promise<SearchMatch[]> {
+    const query = String(symbol).trim();
+    if (!query || repositories.length === 0) {
+      return [];
+    }
+
+    const lookupStore = new SearchResultStore();
+    const lookupSession = new SearchSession({
+      refreshMs: 50,
+      onStateChange: () => undefined,
+      onResultsPush: () => undefined
+    }, lookupStore);
+    const token = lookupSession.begin();
+    const silentRouter = new WebviewMessageRouter();
+    const lookupDefinitionSearch = new DefinitionSearch(
+      lookupSession,
+      lookupStore,
+      this.connectionController,
+      this.workspaceResolver,
+      this.translationService,
+      this.remoteExecutor,
+      this.remoteToolInstaller,
+      this.logger,
+      this.contentSearchConfig
+    );
+
+    try {
+      const resolved = await this.remoteSearchPreflight.prepareDefinitionRepositories(
+        settings,
+        workspaceFolder,
+        repositories,
+        token,
+        silentRouter
+      );
+      const options: SearchOptions = {
+        query,
+        include: '',
+        exclude: '',
+        caseSensitive: false,
+        wholeWord: false,
+        useRegex: false,
+        definitionMode: true,
+        triggerSource: 'context-menu'
+      };
+      for (const repository of resolved) {
+        const ok = await lookupDefinitionSearch.execute(token, options, settings, repository, silentRouter, true, Date.now());
+        if (!ok) {
+          break;
+        }
+      }
+    } catch (error) {
+      this.logger.log(`lookup-definition error: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    return lookupStore.snapshot('content').items.flatMap((item) => item.matches);
   }
 
   private clearSearchResults(messageRouter: WebviewMessageRouter, requestId?: number): void {
