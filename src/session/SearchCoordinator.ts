@@ -169,17 +169,23 @@ export class SearchCoordinator {
     symbol: string,
     settings: SearchSettings,
     workspaceFolder: vscode.WorkspaceFolder,
-    repositories: SearchRepository[]
+    repositories: SearchRepository[],
+    onPhase?: (phase: string) => void
   ): Promise<SearchMatch[]> {
     const query = String(symbol).trim();
     if (!query || repositories.length === 0) {
       return [];
     }
+    onPhase?.('Searching definitions…');
 
     const lookupStore = new SearchResultStore();
     const lookupSession = new SearchSession({
       refreshMs: 50,
-      onStateChange: () => undefined,
+      onStateChange: (state) => {
+        if (onPhase && state.summary) {
+          onPhase(state.summary);
+        }
+      },
       onResultsPush: () => undefined
     }, lookupStore);
     const token = lookupSession.begin();

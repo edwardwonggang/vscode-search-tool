@@ -69,6 +69,8 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
   private queuedOpenMatch?: SearchMatch;
   private queuedOpenMatchNewTab = false;
   private definitionPicker: DefinitionPicker;
+  private definitionHintDecoration?: vscode.TextEditorDecorationType;
+  private workspaceInfoCache?: { at: number; info: WorkspaceInfo };
   private openingMatch = false;
   private keepaliveTimer?: NodeJS.Timeout;
   private autoConnectInFlight = false;
@@ -181,61 +183,68 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     const position = editor.selection.active;
     const range = editor.document.getWordRangeAtPosition(position);
     const symbol = range ? editor.document.getText(range).trim() : '';
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(symbol)) {
+    if (!range || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(symbol)) {
       void vscode.window.showInformationMessage(await this.services.translationService.translate('goto_def_no_symbol'));
       return;
     }
 
-    const workspaceInfo = await this.getWorkspaceInfo();
-    if (!workspaceInfo.workspaceOk) {
-      void vscode.window.showErrorMessage(workspaceInfo.workspaceError || await this.services.translationService.translate('workspace_none'));
-      return;
-    }
-    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-    if (!workspaceFolder) {
-      return;
-    }
-    if (!workspaceInfo.hasGit) {
-      void vscode.window.showInformationMessage(await this.services.translationService.translate('definition_requires_git'));
-      return;
-    }
-    const settings = this.getSettings();
-    if (!this.services.connectionController.isRemoteSearchConfigured(settings)) {
-      void vscode.window.showInformationMessage(await this.services.translationService.translate('connection_required'));
-      return;
-    }
-
-    let matches: SearchMatch[];
+    this.showDefinitionHint(editor, range, 'Searching definitions…');
     try {
-      matches = await vscode.window.withProgress(
-        { location: vscode.ProgressLocation.Notification, title: `Ripgrep: ${symbol}` },
-        () => this.services.searchCoordinator.lookupDefinitions(symbol, settings, workspaceFolder, workspaceInfo.repositories)
+      const workspaceInfo = await this.getCachedWorkspaceInfo();
+      if (!workspaceInfo.workspaceOk) {
+        this.clearDefinitionHint();
+        void vscode.window.showErrorMessage(workspaceInfo.workspaceError || await this.services.translationService.translate('workspace_none'));
+        return;
+      }
+      const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+      if (!workspaceFolder) {
+        return;
+      }
+      if (!workspaceInfo.hasGit) {
+        this.clearDefinitionHint();
+        void vscode.window.showInformationMessage(await this.services.translationService.translate('definition_requires_git'));
+        return;
+      }
+      const settings = this.getSettings();
+      if (!this.services.connectionController.isRemoteSearchConfigured(settings)) {
+        this.clearDefinitionHint();
+        void vscode.window.showInformationMessage(await this.services.translationService.translate('connection_required'));
+        return;
+      }
+
+      const matches = await this.services.searchCoordinator.lookupDefinitions(
+        symbol,
+        settings,
+        workspaceFolder,
+        workspaceInfo.repositories,
+        (phase) => this.showDefinitionHint(editor, range, phase)
       );
+      this.clearDefinitionHint();
+
+      const uniqueMatches = dedupeMatches(matches);
+      if (uniqueMatches.length === 0) {
+        void vscode.window.showInformationMessage(
+          await this.services.translationService.format('goto_def_not_found', { symbol })
+        );
+        return;
+      }
+      if (uniqueMatches.length === 1) {
+        this.enqueueOpenMatch(uniqueMatches[0], true);
+        return;
+      }
+
+      await this.definitionPicker.show({
+        symbol,
+        matches: uniqueMatches,
+        onSelect: (match) => {
+          this.enqueueOpenMatch(match, true);
+        }
+      });
     } catch (error) {
+      this.clearDefinitionHint();
       const message = error instanceof Error ? error.message : String(error);
       void vscode.window.showErrorMessage(await this.services.translationService.format('goto_def_failed', { message }));
-      return;
     }
-
-    const uniqueMatches = dedupeMatches(matches);
-    if (uniqueMatches.length === 0) {
-      void vscode.window.showInformationMessage(
-        await this.services.translationService.format('goto_def_not_found', { symbol })
-      );
-      return;
-    }
-    if (uniqueMatches.length === 1) {
-      this.enqueueOpenMatch(uniqueMatches[0], true);
-      return;
-    }
-
-    await this.definitionPicker.show({
-      symbol,
-      matches: uniqueMatches,
-      onSelect: (match) => {
-        this.enqueueOpenMatch(match, true);
-      }
-    });
   }
 
   public async openLogFileInEditor(): Promise<void> {
@@ -258,6 +267,7 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
   public dispose(): void {
     this.stopKeepalive();
     this.definitionPicker.disposePanel();
+    this.clearDefinitionHint();
     this.services.session.dispose();
     this.services.connectionController.close('provider disposed');
   }
@@ -376,6 +386,43 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     });
     this.workspaceInfo = info;
     return info;
+  }
+
+  /**
+   * 转到定义前的工作区信息：5 秒内复用，避免每次 Ctrl+点击都重复遍历网络目录发现 Git。
+   */
+  private async getCachedWorkspaceInfo(): Promise<WorkspaceInfo> {
+    const now = Date.now();
+    if (this.workspaceInfoCache && now - this.workspaceInfoCache.at < 5000) {
+      return this.workspaceInfoCache.info;
+    }
+    const info = await this.getWorkspaceInfo();
+    this.workspaceInfoCache = { at: now, info };
+    return info;
+  }
+
+  /**
+   * 编辑器内联提示：在触发符号后紧邻显示阶段文字，替代系统进度通知。
+   */
+  private showDefinitionHint(editor: vscode.TextEditor, range: vscode.Range, text: string): void {
+    this.clearDefinitionHint();
+    const decoration = vscode.window.createTextEditorDecorationType({
+      after: {
+        contentText: ` ${text}`,
+        color: '#e8a33d',
+        fontWeight: '600',
+        fontStyle: 'italic'
+      }
+    });
+    this.definitionHintDecoration = decoration;
+    editor.setDecorations(decoration, [range]);
+  }
+
+  private clearDefinitionHint(): void {
+    if (this.definitionHintDecoration) {
+      this.definitionHintDecoration.dispose();
+      this.definitionHintDecoration = undefined;
+    }
   }
 
   private async ensureWorkspaceUsable(): Promise<boolean> {
