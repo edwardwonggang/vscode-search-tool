@@ -57,6 +57,7 @@ async function main() {
   await ensureBareRepository(repositoryDirectory);
   await configureLocalRemote(repositoryDirectory);
   await runGit(['push', 'local', branch]);
+  await runGit(['--git-dir', repositoryDirectory, 'symbolic-ref', 'HEAD', `refs/heads/${branch}`], storeDirectory);
   console.log(`Registered project: ${projectName}`);
   console.log(`Local repository: ${repositoryDirectory}`);
   console.log(`Branch pushed: ${branch}`);
