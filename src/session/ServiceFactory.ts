@@ -6,6 +6,7 @@ import { SettingsStore } from '../core/SettingsStore';
 import { SshClientManager } from '../remote/SshClientManager';
 import { RemoteExecutor } from '../remote/RemoteExecutor';
 import { RemoteToolInstaller, bundledLinuxRgPath } from '../remote/RemoteToolInstaller';
+import { DEFAULT_DEFINITION_EXCLUDE_GLOBS } from '../core/defaults';
 import { WorkspaceResolver } from '../workspace/WorkspaceResolver';
 import { SearchResultStore } from '../search/SearchResultStore';
 import { WebviewMessageRouter } from '../search/WebviewMessageRouter';
@@ -41,6 +42,7 @@ export function createServices(context: ExtensionContext): Services {
   const messageRouter = new WebviewMessageRouter();
   const config = vscode.workspace.getConfiguration('ripgrepTool');
   const resultRefreshMs = Math.max(4, config.get<number>('resultRefreshMs', 80));
+  const definitionExcludeGlobs = config.get<string[]>('definitionExcludeGlobs', DEFAULT_DEFINITION_EXCLUDE_GLOBS);
 
   const session = new SearchSession({
     refreshMs: resultRefreshMs,
@@ -92,7 +94,8 @@ export function createServices(context: ExtensionContext): Services {
     {
       contextLines: Math.max(0, config.get<number>('contextLines', 0)),
       threads: Math.max(0, config.get<number>('threads', 0)),
-      resultRefreshMs
+      resultRefreshMs,
+      definitionExcludeGlobs
     },
     {
       resultRefreshMs

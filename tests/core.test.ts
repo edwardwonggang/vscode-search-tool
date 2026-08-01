@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import { promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { DEFAULT_EXCLUDE_GLOBS, DEFAULT_INCLUDE_GLOBS, DEFAULT_REMOTE_PORT } from '../src/core/defaults';
+import { DEFAULT_DEFINITION_EXCLUDE_GLOBS, DEFAULT_EXCLUDE_GLOBS, DEFAULT_INCLUDE_GLOBS, DEFAULT_REMOTE_PORT } from '../src/core/defaults';
 import {
+  createDefinitionResultPathFilter,
   createFileQueryMatcher,
   createResultPathFilter,
   matchSearchGlob,
@@ -198,6 +199,26 @@ test('default excludes include node_modules', () => {
   const filter = createResultPathFilter(baseOptions(), normalizeSettings(undefined));
   assert.equal(filter('node_modules/pkg/source.c'), false);
   assert.equal(filter('lib/source.c'), true);
+});
+
+test('definition path filter excludes mock, cpp, and unittest paths by default', () => {
+  assert.deepEqual(DEFAULT_DEFINITION_EXCLUDE_GLOBS, [
+    '**/*mock*',
+    '**/*mock*/**',
+    '**/*.cpp',
+    '**/unittest/**'
+  ]);
+  const filter = createDefinitionResultPathFilter(baseOptions(), baseSettings(), DEFAULT_DEFINITION_EXCLUDE_GLOBS);
+
+  assert.equal(filter('src/main.h'), true);
+  assert.equal(filter('src/main.c'), true);
+  assert.equal(filter('src/main.cpp'), false);
+  assert.equal(filter('test/mock_util.c'), false);
+  assert.equal(filter('test/mock.c'), false);
+  assert.equal(filter('unittest/foo.c'), false);
+  assert.equal(filter('src/unittest/foo.h'), false);
+  assert.equal(filter('src/unittest_helper.c'), true);
+  assert.equal(filter('power/mock_module/main.c'), false);
 });
 
 test('project settings keys normalize remote paths', () => {
@@ -595,7 +616,15 @@ test('ctags tag lines parse symbol, path, line, and preview', () => {
     kind: 'f'
   });
 
-  assert.equal(parseTagLine('needle\t/home/alice/src/main.ts\t/^const needle = 1$/;"\tv\tline:7', 'needle', '/tmp'), null);
+  assert.deepEqual(parseTagLine('needle\t/home/alice/src/main.ts\t/^const needle = 1$/;"\tv\tline:7', 'needle', '/tmp'), {
+    name: 'needle',
+    remoteFileAbs: '/home/alice/src/main.ts',
+    line: 7,
+    column: 7,
+    endColumn: 13,
+    preview: 'const needle = 1',
+    kind: 'v'
+  });
 
   assert.deepEqual(parseTagLine('needle\tsrc/main.ts\t/^  obj\\.needle = call\\(\\)$/;"\tm\tline:9', 'needle', '/tmp'), {
     name: 'needle',

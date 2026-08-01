@@ -3,6 +3,14 @@ export const REMOTE_HOME_ROOT = '/home';
 
 export const DEFAULT_INCLUDE_GLOBS: string[] = [];
 
+// 定义搜索（含右键“转到定义”）默认排除的路径：mock 文件、cpp 文件、unittest 目录。
+export const DEFAULT_DEFINITION_EXCLUDE_GLOBS = [
+  '**/*mock*',
+  '**/*mock*/**',
+  '**/*.cpp',
+  '**/unittest/**'
+];
+
 export const DEFAULT_EXCLUDE_GLOBS = [
   '**/.git/**',
   '**/.svn/**',

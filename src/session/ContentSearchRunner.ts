@@ -20,6 +20,7 @@ export type ContentSearchConfig = {
   contextLines: number;
   threads: number;
   resultRefreshMs: number;
+  definitionExcludeGlobs: string[];
 };
 
 export class ContentSearchRunner {

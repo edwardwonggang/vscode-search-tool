@@ -8,7 +8,7 @@ export type SearchOptions = {
   wholeWord: boolean;
   useRegex: boolean;
   definitionMode?: boolean;
-  triggerSource?: 'input' | 'enter' | 'toggle' | 'restore' | 'connection' | 'history';
+  triggerSource?: 'input' | 'enter' | 'toggle' | 'restore' | 'connection' | 'history' | 'context-menu';
 };
 
 export type SearchSettings = {

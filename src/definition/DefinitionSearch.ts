@@ -14,6 +14,7 @@ import { shellEscape } from '../core/shell';
 import type { SearchSession } from '../session/SearchSession';
 import type { WebviewMessageRouter } from '../search/WebviewMessageRouter';
 import type { ConnectionController } from '../session/ConnectionController';
+import { createDefinitionResultPathFilter } from '../core/glob';
 import { StreamingLineProcessor } from '../search/StreamingLineProcessor';
 import { filterRipgrepStderr, isIgnorableRipgrepFailure } from '../session/rgDiagnostics';
 import {
@@ -29,6 +30,7 @@ export type DefinitionSearchConfig = {
   contextLines: number;
   threads: number;
   resultRefreshMs: number;
+  definitionExcludeGlobs: string[];
 };
 
 export class DefinitionSearch {
@@ -217,8 +219,7 @@ export class DefinitionSearch {
   }
 
   private createResultPathFilter(options: SearchOptions, settings: SearchSettings): (relativePath: string) => boolean {
-    const { createResultPathFilter } = require('../core/glob');
-    return createResultPathFilter(options, settings);
+    return createDefinitionResultPathFilter(options, settings, this.config.definitionExcludeGlobs);
   }
 
   private parseTagResultLine(

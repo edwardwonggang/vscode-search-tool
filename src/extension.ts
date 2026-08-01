@@ -165,6 +165,84 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     this.focus();
   }
 
+  /**
+   * 右键“转到定义”：取光标下的标识符，在 Linux 远端 ctags 索引中查找定义。
+   */
+  public async goToDefinitionCommand(): Promise<void> {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) {
+      void vscode.window.showInformationMessage(await this.services.translationService.translate('goto_def_no_symbol'));
+      return;
+    }
+    const position = editor.selection.active;
+    const range = editor.document.getWordRangeAtPosition(position);
+    const symbol = range ? editor.document.getText(range).trim() : '';
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(symbol)) {
+      void vscode.window.showInformationMessage(await this.services.translationService.translate('goto_def_no_symbol'));
+      return;
+    }
+
+    const workspaceInfo = await this.getWorkspaceInfo();
+    if (!workspaceInfo.workspaceOk) {
+      void vscode.window.showErrorMessage(workspaceInfo.workspaceError || await this.services.translationService.translate('workspace_none'));
+      return;
+    }
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    if (!workspaceFolder) {
+      return;
+    }
+    if (!workspaceInfo.hasGit) {
+      void vscode.window.showInformationMessage(await this.services.translationService.translate('definition_requires_git'));
+      return;
+    }
+    const settings = this.getSettings();
+    if (!this.services.connectionController.isRemoteSearchConfigured(settings)) {
+      void vscode.window.showInformationMessage(await this.services.translationService.translate('connection_required'));
+      return;
+    }
+
+    let matches: SearchMatch[];
+    try {
+      matches = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: `Ripgrep: ${symbol}` },
+        () => this.services.searchCoordinator.lookupDefinitions(symbol, settings, workspaceFolder, workspaceInfo.repositories)
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      void vscode.window.showErrorMessage(await this.services.translationService.format('goto_def_failed', { message }));
+      return;
+    }
+
+    const uniqueMatches = dedupeMatches(matches);
+    if (uniqueMatches.length === 0) {
+      void vscode.window.showInformationMessage(
+        await this.services.translationService.format('goto_def_not_found', { symbol })
+      );
+      return;
+    }
+    if (uniqueMatches.length === 1) {
+      this.enqueueOpenMatch(uniqueMatches[0]);
+      return;
+    }
+
+    const pick = vscode.window.createQuickPick<vscode.QuickPickItem & { match?: SearchMatch }>();
+    pick.placeholder = await this.services.translationService.format('goto_def_picker_placeholder', { symbol });
+    pick.items = uniqueMatches.map((match) => ({
+      label: match.relativePath || match.path,
+      description: `${match.line}:${match.column}`,
+      detail: match.preview,
+      match
+    }));
+    pick.onDidAccept(() => {
+      const selected = pick.selectedItems[0];
+      pick.dispose();
+      if (selected?.match) {
+        this.enqueueOpenMatch(selected.match);
+      }
+    });
+    pick.show();
+  }
+
   public async openLogFileInEditor(): Promise<void> {
     const logPath = await this.services.logger.getLogFilePath();
     await fs.mkdir(path.dirname(logPath), { recursive: true });
@@ -495,6 +573,7 @@ export function activate(context: vscode.ExtensionContext): void {
       await vscode.commands.executeCommand('workbench.view.extension.ripgrepTool');
       await provider.focusSearch();
     }),
+    vscode.commands.registerCommand('ripgrepTool.goToDefinition', () => void provider.goToDefinitionCommand()),
     vscode.commands.registerCommand('ripgrepTool.openLogFile', async () => {
       try {
         await provider.openLogFileInEditor();
@@ -531,4 +610,17 @@ function toRepositoryPayload(repository: SearchRepository): { name: string; rela
     relativePath: repository.workspaceRelativePath,
     displayPath: repository.displayPath
   };
+}
+
+function dedupeMatches(matches: SearchMatch[]): SearchMatch[] {
+  const seen = new Set<string>();
+  const unique: SearchMatch[] = [];
+  for (const match of matches) {
+    const key = `${match.uri ?? match.path}|${match.line}|${match.column}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      unique.push(match);
+    }
+  }
+  return unique;
 }
