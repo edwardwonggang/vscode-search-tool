@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Local Git History</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>Local Git History</h1>
+      <p id="repositoryPath" class="muted">Loading repository store...</p>
+    </div>
+    <div class="toolbar-actions">
+      <label for="projectSelect">Project</label>
+      <select id="projectSelect" disabled>
+        <option>Loading...</option>
+      </select>
+      <button id="refreshButton" type="button">Refresh</button>
+    </div>
+  </header>
+
+  <main class="page">
+    <section class="summary-grid" aria-label="Repository summary">
+      <div class="summary-card"><span>Current branch</span><strong id="branchValue">-</strong></div>
+      <div class="summary-card"><span>Current commit</span><strong id="headValue">-</strong></div>
+      <div class="summary-card"><span>Local branches</span><strong id="refsValue">-</strong></div>
+    </section>
+
+    <div id="errorBox" class="error" hidden></div>
+    <section class="content-grid">
+      <aside class="panel commits-panel">
+        <div class="panel-heading">
+          <h2>Commits</h2>
+          <span id="commitCount" class="muted"></span>
+        </div>
+        <div id="commitList" class="commit-list"></div>
+        <button id="loadMoreButton" class="load-more" type="button" hidden>Load more</button>
+      </aside>
+
+      <section class="panel detail-panel">
+        <div class="panel-heading">
+          <h2 id="detailTitle">Select a commit</h2>
+          <span id="detailMeta" class="muted"></span>
+        </div>
+        <p id="detailAuthor" class="muted"></p>
+        <h3>Changed files</h3>
+        <pre id="changedFiles" class="file-list"></pre>
+        <h3>Diff</h3>
+        <pre id="diff" class="diff">Select a commit to inspect its changes.</pre>
+      </section>
+    </section>
+  </main>
+  <script src="/app.js" defer></script>
+</body>
+</html>
