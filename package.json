@@ -2,7 +2,7 @@
   "name": "ripgreptool",
   "displayName": "Ripgrep Tool",
   "description": "Remote ripgrep search in the sidebar. Limits and setup are in the README (extension details), not in the in-editor UI.",
-  "version": "0.0.76",
+  "version": "0.0.77",
   "publisher": "local",
   "license": "UNLICENSED",
   "extensionKind": [
