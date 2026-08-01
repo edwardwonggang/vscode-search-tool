@@ -22,7 +22,8 @@ import {
   inferRemoteWorkspacePath,
   isPosixAbsolutePath,
   normalizeLocalPath,
-  normalizeRemotePath
+  normalizeRemotePath,
+  sameLocalPath
 } from '../src/core/paths';
 import { normalizeSettings } from '../src/core/settings';
 import { createProjectSettingsKey, SettingsStore, type SettingsStorage } from '../src/core/SettingsStore';
@@ -327,6 +328,8 @@ test('remote and local path helpers preserve boundary rules', () => {
   assert.equal(getRelativeRemotePath('/home/alice/repo2/src/a.ts', '/home/alice/repo'), undefined);
   assert.equal(isPosixAbsolutePath('\\home\\alice'), true);
   assert.equal(normalizeLocalPath('D:\\Repo\\Src\\'), 'd:/repo/src');
+  assert.equal(sameLocalPath('D:\\Repo\\Src\\main.c', 'd:/repo/src/main.c'), true);
+  assert.equal(sameLocalPath('D:\\Repo\\Src\\main.c', 'D:\\Repo\\Src\\other.c'), false);
 });
 
 test('git repository discovery scans up to three levels and stops below discovered roots', async () => {
