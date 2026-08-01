@@ -2,7 +2,7 @@
   "name": "ripgreptool",
   "displayName": "Ripgrep Tool",
   "description": "Remote ripgrep search in the sidebar. Limits and setup are in the README (extension details), not in the in-editor UI.",
-  "version": "0.0.78",
+  "version": "0.0.79",
   "publisher": "local",
   "license": "UNLICENSED",
   "extensionKind": [
@@ -111,7 +111,15 @@
           "when": "editorTextFocus"
         }
       ]
-    }
+    },
+    "keybindings": [
+      {
+        "command": "ripgrepTool.goToDefinition",
+        "key": "ctrl+click",
+        "mac": "cmd+click",
+        "when": "editorTextFocus && !editorReadonly"
+      }
+    ]
   },
   "scripts": {
     "build": "tsc -p ./ --noEmit && node scripts/bundle-extension.mjs",
