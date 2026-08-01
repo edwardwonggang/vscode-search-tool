@@ -76,7 +76,7 @@ async function getRepositorySummary(repositoryDirectory) {
 }
 
 function parseCommitRecords(output) {
-  return output.trim().split('\x1e').filter(Boolean).map((record) => {
+  return output.split('\x1e').map((record) => record.trim()).filter(Boolean).map((record) => {
     const [hash, shortHash, author, email, date, subject] = record.split('\x1f');
     return { hash, shortHash, author, email, date, subject };
   });
