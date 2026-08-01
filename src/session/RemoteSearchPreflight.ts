@@ -18,13 +18,40 @@ export class RemoteSearchPreflight {
     private readonly session?: RemoteSearchPreflightSession
   ) {}
 
-  public async prepare(
+  /**
+   * 普通内容/文件搜索前置：解析单一工作区根 cwd，不要求远端是 Git 根。
+   */
+  public async prepareSearchRoot(
+    settings: SearchSettings,
+    workspaceFolder: vscode.WorkspaceFolder,
+    messageRouter: WebviewMessageRouter,
+    token: number
+  ): Promise<ResolvedSearchRepository> {
+    this.session?.postPhase('Resolving remote search path...');
+    const searchRoot = await this.workspaceResolver.resolveWorkspaceSearchRoot(
+      settings,
+      workspaceFolder,
+      await this.translationService.translate('err_remote_search_path_required')
+    );
+    if (this.session?.isCurrent(token)) {
+      messageRouter.postConnectionResult({ ok: true, message: `Current SSH path: ${searchRoot.remoteCwd}`, cwd: searchRoot.remoteCwd });
+    }
+    return searchRoot;
+  }
+
+  /**
+   * 定义搜索/ctags 前置：解析发现的 Git 根目录并逐个校验远端 Git 根。
+   */
+  public async prepareDefinitionRepositories(
     settings: SearchSettings,
     workspaceFolder: vscode.WorkspaceFolder,
     repositories: SearchRepository[],
     token: number,
     messageRouter: WebviewMessageRouter
   ): Promise<ResolvedSearchRepository[]> {
+    if (repositories.length === 0) {
+      throw new Error(await this.translationService.translate('definition_requires_git'));
+    }
     this.session?.postPhase('Resolving remote search paths...');
     const resolvedRepositories = await this.workspaceResolver.resolveSearchRepositories(
       settings,
@@ -46,7 +73,7 @@ export class RemoteSearchPreflight {
 
     const message = resolvedRepositories.length === 1
       ? `Current SSH path: ${resolvedRepositories[0].remoteCwd}`
-      : `Search repositories: ${resolvedRepositories.length}`;
+      : `Definition search roots: ${resolvedRepositories.length}`;
     messageRouter.postConnectionResult({ ok: true, message, cwd: resolvedRepositories.map((repository) => repository.remoteCwd).join('\n') });
     return resolvedRepositories;
   }

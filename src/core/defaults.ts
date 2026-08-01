@@ -8,6 +8,7 @@ export const DEFAULT_EXCLUDE_GLOBS = [
   '**/.svn/**',
   '**/.hg/**',
   '**/.*/**',
+  '**/node_modules/**',
   '**/.cache/**',
   '**/__pycache__/**',
   '**/.gradle/**',

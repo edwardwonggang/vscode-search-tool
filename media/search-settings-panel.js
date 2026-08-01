@@ -8,7 +8,7 @@
       this.getCurrentSettings = options.getCurrentSettings;
       this.translate = options.translate;
       this.renderBlocked = options.renderBlocked;
-      this.isGitRootOk = options.isGitRootOk;
+      this.isWorkspaceOk = options.isWorkspaceOk;
       this.persistState = options.persistState;
       this.syncCurrentRemotePathDisplay = options.syncCurrentRemotePathDisplay;
       this.setIcon = options.setIcon;
@@ -17,7 +17,7 @@
     }
 
     open() {
-      if (!this.isGitRootOk()) {
+      if (!this.isWorkspaceOk()) {
         this.renderBlocked();
         return;
       }
@@ -41,7 +41,7 @@
     }
 
     reset() {
-      if (!this.isGitRootOk()) {
+      if (!this.isWorkspaceOk()) {
         this.renderBlocked();
         return;
       }
@@ -70,7 +70,7 @@
     }
 
     togglePassword() {
-      if (!this.isGitRootOk()) {
+      if (!this.isWorkspaceOk()) {
         return;
       }
       this.elements.remotePassword.type = this.elements.remotePassword.type === 'password' ? 'text' : 'password';

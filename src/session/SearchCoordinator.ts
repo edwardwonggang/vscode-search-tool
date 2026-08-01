@@ -127,7 +127,18 @@ export class SearchCoordinator {
 
     let resolvedRepositories: ResolvedSearchRepository[];
     try {
-      resolvedRepositories = await this.remoteSearchPreflight.prepare(settings, workspaceFolder, repositories, token, messageRouter);
+      if (plan.kind === 'search' && plan.mode === 'definition') {
+        resolvedRepositories = await this.remoteSearchPreflight.prepareDefinitionRepositories(
+          settings,
+          workspaceFolder,
+          repositories,
+          token,
+          messageRouter
+        );
+      } else {
+        const searchRoot = await this.remoteSearchPreflight.prepareSearchRoot(settings, workspaceFolder, messageRouter, token);
+        resolvedRepositories = [searchRoot];
+      }
     } catch (error) {
       messageRouter.postState({
         type: 'state',

@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import type { ExtensionContext } from 'vscode';
 import { ExtensionLogger } from '../logging/ExtensionLogger';
 import { TranslationService } from '../i18n/TranslationService';
+import { SettingsStore } from '../core/SettingsStore';
 import { SshClientManager } from '../remote/SshClientManager';
 import { RemoteExecutor } from '../remote/RemoteExecutor';
 import { RemoteToolInstaller, bundledLinuxRgPath } from '../remote/RemoteToolInstaller';
@@ -20,6 +21,7 @@ const SEARCH_VIEW_I18N_RELATIVE_PATH = 'media/i18n/search-view.csv';
 
 export type Services = {
   logger: ExtensionLogger;
+  settingsStore: SettingsStore;
   translationService: TranslationService;
   workspaceResolver: WorkspaceResolver;
   resultStore: SearchResultStore;
@@ -32,6 +34,7 @@ export type Services = {
 
 export function createServices(context: ExtensionContext): Services {
   const logger = new ExtensionLogger(context);
+  const settingsStore = new SettingsStore(context.globalState);
   const translationService = new TranslationService(context, SEARCH_VIEW_I18N_RELATIVE_PATH);
   const workspaceResolver = new WorkspaceResolver();
   const resultStore = new SearchResultStore();
@@ -107,6 +110,7 @@ export function createServices(context: ExtensionContext): Services {
 
   return {
     logger,
+    settingsStore,
     translationService,
     workspaceResolver,
     resultStore,

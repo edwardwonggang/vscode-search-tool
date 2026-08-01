@@ -58,8 +58,9 @@
     includeGlobs: [...defaultIncludeGlobs],
     excludeGlobs: [...defaultExcludeGlobs]
   };
-  let gitRootOk = true;
-  let gitRootMessage = '';
+  let workspaceOk = true;
+  let workspaceMessage = '';
+  let hasGit = false;
   let workspacePath = '';
   let repositories = [];
   let currentRemotePath = '';
@@ -88,7 +89,7 @@
     onNavigate: persistState
   });
 
-  const gitRootBoundControls = [
+  const workspaceBlockedControls = [
     queryEl,
     fileQueryEl,
     includeEl,
@@ -226,22 +227,44 @@
     return activeSearchRequestId;
   }
 
-  function setGitRootState(ok, message) {
-    gitRootOk = ok !== false;
-    gitRootMessage = gitRootOk ? '' : (message || t('git_root_required'));
-    syncGitRootDisabledState();
-    if (!gitRootOk) {
-      renderGitRootRequired(gitRootMessage);
+  function setWorkspaceState(ok, message) {
+    workspaceOk = ok !== false;
+    workspaceMessage = workspaceOk ? '' : (message || t('workspace_none'));
+    syncBlockedDisabledState();
+    if (!workspaceOk) {
+      renderWorkspaceBlocked(workspaceMessage);
     }
   }
 
-  function syncGitRootDisabledState() {
-    const blocked = !gitRootOk;
+  function setHasGit(value) {
+    hasGit = value !== false;
+    applyDefinitionAvailability();
+  }
+
+  function applyDefinitionAvailability() {
+    const definitionUnavailable = !hasGit;
+    if (definitionModeEl) {
+      definitionModeEl.disabled = definitionUnavailable || !workspaceOk;
+      if (definitionUnavailable) {
+        definitionModeEl.checked = false;
+      }
+    }
+    if (definitionModeToggleEl) {
+      definitionModeToggleEl.hidden = definitionUnavailable;
+    }
+    if (rebuildTagsButtonEl) {
+      rebuildTagsButtonEl.hidden = definitionUnavailable;
+    }
+    syncDefinitionRootClass();
+  }
+
+  function syncBlockedDisabledState() {
+    const blocked = !workspaceOk;
     const root = document.querySelector('.root');
     if (root) {
       root.classList.toggle('gitBlocked', blocked);
     }
-    gitRootBoundControls.forEach((control) => {
+    workspaceBlockedControls.forEach((control) => {
       control.disabled = blocked;
       control.setAttribute('aria-disabled', blocked ? 'true' : 'false');
     });
@@ -253,9 +276,10 @@
     if (blocked && settingsPanel.isOpen()) {
       settingsPanel.close();
     }
+    applyDefinitionAvailability();
   }
 
-  function renderGitRootRequired(message) {
+  function renderWorkspaceBlocked(message) {
     resultsEl.innerHTML = `<div class="gitRootRequired">${escapeHtml(message)}</div>`;
     persistState();
   }
@@ -281,8 +305,8 @@
       triggerSource = 'input'
     } = options;
     enforceExclusiveSearchFields();
-    if (!gitRootOk) {
-      renderGitRootRequired(gitRootMessage || t('git_root_required'));
+    if (!workspaceOk) {
+      renderWorkspaceBlocked(workspaceMessage || t('workspace_none'));
       return;
     }
     currentOptions = getPayload();
@@ -385,7 +409,7 @@
   }
 
   function searchRestoredQueryAfterConnection() {
-    if (!gitRootOk) return;
+    if (!workspaceOk) return;
     const q = String(queryEl.value).trim() || String(fileQueryEl.value).trim();
     if (!q) return;
     const key = JSON.stringify(getPayload());
@@ -411,10 +435,10 @@
   const resultsRenderer = new window.RipgrepToolResultsRenderer({
     resultsEl,
     collapsedFiles,
-    isGitRootOk: () => gitRootOk,
-    getGitRootMessage: () => gitRootMessage || t('git_root_required'),
+    isWorkspaceOk: () => workspaceOk,
+    getWorkspaceMessage: () => workspaceMessage || t('workspace_none'),
     getIsFileSearch: () => currentResultMode === 'file',
-    renderGitRootRequired,
+    renderWorkspaceBlocked,
     renderEmpty: () => `<div class="empty">${escapeHtml(t('empty_results'))}</div>`,
     renderFileIcon: (relativePath) => iconRegistry.renderFileIcon(relativePath),
     formatPreview,
@@ -444,8 +468,8 @@
     defaultExcludeGlobs,
     getCurrentSettings: () => currentSettings,
     translate: t,
-    renderBlocked: () => renderGitRootRequired(gitRootMessage || t('git_root_required')),
-    isGitRootOk: () => gitRootOk,
+    renderBlocked: () => renderWorkspaceBlocked(workspaceMessage || t('workspace_none')),
+    isWorkspaceOk: () => workspaceOk,
     persistState,
     syncCurrentRemotePathDisplay,
     setIcon: (id, svg, fallbackText) => iconRegistry.setIcon(id, svg, fallbackText),
@@ -664,8 +688,8 @@
   }
 
   function saveSettings() {
-    if (!gitRootOk) {
-      renderGitRootRequired(gitRootMessage || t('git_root_required'));
+    if (!workspaceOk) {
+      renderWorkspaceBlocked(workspaceMessage || t('workspace_none'));
       return;
     }
     vscode.postMessage({ type: 'saveSettings', payload: settingsPanel.buildPayload() });
@@ -673,7 +697,7 @@
   }
 
   queryEl.addEventListener('keydown', (event) => {
-    if (!gitRootOk) return;
+    if (!workspaceOk) return;
     if (event.key === 'Enter') startSearch();
     if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
       if (searchHistory.navigate(queryEl, event.key === 'ArrowUp' ? -1 : 1)) {
@@ -682,7 +706,7 @@
     }
   });
   fileQueryEl.addEventListener('keydown', (event) => {
-    if (!gitRootOk) return;
+    if (!workspaceOk) return;
     if (event.key === 'Enter') startSearch();
     if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
       if (searchHistory.navigate(fileQueryEl, event.key === 'ArrowUp' ? -1 : 1)) {
@@ -691,11 +715,11 @@
     }
   });
   includeEl.addEventListener('keydown', (event) => {
-    if (!gitRootOk) return;
+    if (!workspaceOk) return;
     if (event.key === 'Enter') startSearch();
   });
   excludeEl.addEventListener('keydown', (event) => {
-    if (!gitRootOk) return;
+    if (!workspaceOk) return;
     if (event.key === 'Enter') startSearch();
   });
   [includeEl, excludeEl].forEach((input) => {
@@ -707,7 +731,7 @@
   useRegexEl.addEventListener('change', syncToggleState);
   definitionModeEl.addEventListener('change', syncToggleState);
   queryEl.addEventListener('input', () => {
-    if (!gitRootOk) return;
+    if (!workspaceOk) return;
     if (queryEl.value) {
       fileQueryEl.value = '';
     }
@@ -717,7 +741,7 @@
     scheduleSearchRefresh(false);
   });
   fileQueryEl.addEventListener('input', () => {
-    if (!gitRootOk) return;
+    if (!workspaceOk) return;
     if (fileQueryEl.value) {
       queryEl.value = '';
     }
@@ -727,13 +751,13 @@
     scheduleSearchRefresh(false);
   });
   includeEl.addEventListener('input', () => {
-    if (!gitRootOk) return;
+    if (!workspaceOk) return;
     persistState();
     clearSearchHistoryCommit();
     scheduleSearchRefresh(false);
   });
   excludeEl.addEventListener('input', () => {
-    if (!gitRootOk) return;
+    if (!workspaceOk) return;
     persistState();
     clearSearchHistoryCommit();
     scheduleSearchRefresh(false);
@@ -746,8 +770,8 @@
     persistState();
   });
   connectButtonEl.addEventListener('click', () => {
-    if (!gitRootOk) {
-      renderGitRootRequired(gitRootMessage || t('git_root_required'));
+    if (!workspaceOk) {
+      renderWorkspaceBlocked(workspaceMessage || t('workspace_none'));
       return;
     }
     settingsPanel.setConnectionStatus(t('connection_connecting'));
@@ -756,15 +780,16 @@
   saveSettingsButtonEl.addEventListener('click', saveSettings);
   if (rebuildTagsButtonEl) {
     rebuildTagsButtonEl.addEventListener('click', () => {
-      if (!gitRootOk) {
-        renderGitRootRequired(gitRootMessage || t('git_root_required'));
+      if (!workspaceOk) {
+        renderWorkspaceBlocked(workspaceMessage || t('workspace_none'));
         return;
       }
+      if (!hasGit) return;
       vscode.postMessage({ type: 'rebuildTags' });
     });
   }
   togglePasswordButtonEl.addEventListener('click', () => {
-    if (!gitRootOk) return;
+    if (!workspaceOk) return;
     settingsPanel.togglePassword();
   });
   settingsLayerEl.addEventListener('click', (event) => {
@@ -774,8 +799,8 @@
     if (event.key === 'Escape' && settingsPanel.isOpen()) settingsPanel.close();
   });
   function handleResultAction(event, source) {
-    if (!gitRootOk) {
-      renderGitRootRequired(gitRootMessage || t('git_root_required'));
+    if (!workspaceOk) {
+      renderWorkspaceBlocked(workspaceMessage || t('workspace_none'));
       return;
     }
     const toggleTarget = event.target.closest('[data-toggle-file]');
@@ -842,8 +867,8 @@
       repositories = Array.isArray(message.payload.repositories) ? message.payload.repositories : [];
       applyTranslations();
       updateWorkspacePathDisplay(message.payload.workspacePath || message.payload.workspaceName || '');
-      syncDefinitionRootClass();
-      setGitRootState(message.payload.gitRootOk, message.payload.gitError);
+      setWorkspaceState(message.payload.workspaceOk, message.payload.workspaceError);
+      setHasGit(message.payload.hasGit);
       if (message.payload.state) {
         summaryTextEl.textContent = message.payload.state.error || message.payload.state.summary || '';
       }
@@ -855,9 +880,9 @@
       return;
     }
     if (message.type === 'focus') queryEl.focus();
-    if (message.type === 'gitRootRequired') {
+    if (message.type === 'workspaceBlocked') {
       updateWorkspacePathDisplay(message.payload.workspacePath || workspacePath);
-      setGitRootState(false, message.payload.message || t('git_root_required'));
+      setWorkspaceState(false, message.payload.message || t('workspace_none'));
       return;
     }
     if (message.type === 'state') {
@@ -921,6 +946,7 @@
   });
 
   syncToggleState(false);
+  applyDefinitionAvailability();
   settingsPanel.syncPasswordToggle();
   setFieldFocus(includeEl, false);
   setFieldFocus(excludeEl, false);
