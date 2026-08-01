@@ -183,10 +183,11 @@
 
   function inferCurrentRemotePathFromInputs() {
     const configured = remoteSearchPathInputEl.value.trim();
+    const inferred = String((currentSettings.inferredRemoteSearchPath || '')).trim();
     if (repositories.length > 0) {
-      return currentRemotePath || formatRepositoryPaths(configured || workspacePath || '');
+      return currentRemotePath || formatRepositoryPaths(configured || inferred || workspacePath || '');
     }
-    if (configured) return configured;
+    if (configured || inferred) return configured || inferred;
     if (currentRemotePath) return currentRemotePath;
     return workspacePath || '';
   }

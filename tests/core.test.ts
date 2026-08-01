@@ -149,6 +149,21 @@ test('normalizeSettings trims values, fixes invalid ports, and preserves default
   assert.deepEqual(normalizeSettings(undefined).includeGlobs, DEFAULT_INCLUDE_GLOBS);
 });
 
+test('normalizeSettings keeps explicit remote path and drops the inferred display field', () => {
+  const normalized = normalizeSettings({
+    remoteHost: 'host',
+    remotePort: 22,
+    remoteUsername: 'alice',
+    remotePassword: 'pw',
+    remoteSearchPath: '/home/alice/project',
+    inferredRemoteSearchPath: '/home/alice/other',
+    includeGlobs: [],
+    excludeGlobs: []
+  });
+  assert.equal(normalized.remoteSearchPath, '/home/alice/project');
+  assert.equal('inferredRemoteSearchPath' in normalized, false);
+});
+
 test('search paths and globs match existing include and exclude behavior', () => {
   assert.equal(normalizeSearchPath('.\\src//main.ts/'), 'src/main.ts');
   assert.deepEqual(splitUserGlobs('src/**, *.ts, ,test/**'), ['src/**', '*.ts', 'test/**']);

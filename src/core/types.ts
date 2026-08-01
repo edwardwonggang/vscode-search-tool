@@ -17,6 +17,7 @@ export type SearchSettings = {
   remoteUsername: string;
   remotePassword: string;
   remoteSearchPath: string;
+  inferredRemoteSearchPath?: string;
   includeGlobs: string[];
   excludeGlobs: string[];
 };
