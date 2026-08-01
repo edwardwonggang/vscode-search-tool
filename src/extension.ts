@@ -7,6 +7,7 @@ import type { SearchMatch, SearchOptions, SearchSettings } from './core/types';
 import { buildIconUris, renderFallbackHtml, renderSearchViewHtml } from './webview/SearchViewHtml';
 import { createServices, type Services } from './session/ServiceFactory';
 import { resolveMatchSelection } from './search/MatchNavigation';
+import type { SearchRepository, WorkspaceInfo } from './workspace/WorkspaceResolver';
 
 const SEARCH_SETTINGS_KEY = 'ripgrepTool.searchSettings';
 const SEARCH_VIEW_HTML_RELATIVE_PATH = 'media/search-view.html';
@@ -62,7 +63,7 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
 
   private view?: vscode.WebviewView;
   private services!: Services;
-  private workspaceInfo?: { displayPath: string; gitRootOk: boolean; gitError?: string };
+  private workspaceInfo?: WorkspaceInfo;
   private searchResultViewColumn?: vscode.ViewColumn;
   private queuedOpenMatch?: SearchMatch;
   private openingMatch = false;
@@ -108,6 +109,7 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
               payload,
               this.getSettings(),
               vscode.workspace.workspaceFolders![0],
+              this.workspaceInfo?.repositories ?? [],
               this.services.messageRouter
             );
           }
@@ -117,6 +119,7 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
             await this.services.searchCoordinator.executeRebuildTags(
               this.getSettings(),
               vscode.workspace.workspaceFolders![0],
+              this.workspaceInfo?.repositories ?? [],
               this.services.messageRouter
             );
           }
@@ -136,6 +139,7 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
           if (await this.ensureWorkspaceGitRootForFeature()) {
             await this.services.connectionController.checkConnection(
               normalizeSettings(message.payload as SearchSettings),
+              this.workspaceInfo?.repositories ?? [],
               (ok, msg, cwd) => this.services.messageRouter.postConnectionResult({ ok, message: msg, cwd })
             );
           }
@@ -214,6 +218,7 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
       workspacePath: workspaceInfo.displayPath,
       gitRootOk: workspaceInfo.gitRootOk,
       gitError: workspaceInfo.gitError,
+      repositories: workspaceInfo.repositories.map(toRepositoryPayload),
       settings: this.getSettings(),
       translations: await this.services.translationService.getTranslations(),
       state: this.services.messageRouter.getState(),
@@ -241,9 +246,11 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     try {
       await this.services.connectionController.checkConnection(
         settings,
+        workspaceInfo.repositories,
         (ok, msg, cwd) => this.services.messageRouter.postConnectionResult({ ok, message: msg, cwd })
       );
       this.startKeepalive();
+      this.services.tagIndexAutoRefresh.refreshIfDue(settings, vscode.workspace.workspaceFolders?.[0], workspaceInfo.repositories);
     } finally {
       this.autoConnectInFlight = false;
     }
@@ -275,13 +282,15 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     try {
       await this.services.connectionController.getOrCreateClient(settings);
       this.services.logger.debug('ssh keepalive check ok');
+      const workspaceInfo = await this.getWorkspaceInfo();
+      this.services.tagIndexAutoRefresh.refreshIfDue(settings, vscode.workspace.workspaceFolders?.[0], workspaceInfo.repositories);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.services.logger.log(`ssh keepalive check failed: ${message}`);
     }
   }
 
-  private async getWorkspaceInfo(): Promise<{ displayPath: string; gitRootOk: boolean; gitError?: string }> {
+  private async getWorkspaceInfo(): Promise<WorkspaceInfo> {
     const info = await this.services.workspaceResolver.getWorkspaceInfo({
       workspaceNone: await this.services.translationService.translate('workspace_none'),
       gitRootRequired: await this.services.translationService.translate('git_root_required'),
@@ -472,4 +481,12 @@ function getNonce(): string {
     value += chars.charAt(Math.floor(Math.random() * chars.length));
   }
   return value;
+}
+
+function toRepositoryPayload(repository: SearchRepository): { name: string; relativePath: string; displayPath: string } {
+  return {
+    name: repository.name,
+    relativePath: repository.workspaceRelativePath,
+    displayPath: repository.displayPath
+  };
 }

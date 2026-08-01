@@ -65,6 +65,12 @@ export function normalizeRemotePath(value: string): string {
     .replace(/\/$/u, '');
 }
 
+export function joinRemotePath(basePath: string, relativePath: string): string {
+  const normalizedBasePath = normalizeRemotePath(basePath);
+  const normalizedRelativePath = normalizeSearchPath(relativePath);
+  return normalizedRelativePath ? posixPath.join(normalizedBasePath, normalizedRelativePath) : normalizedBasePath;
+}
+
 export function isPosixAbsolutePath(value: string): boolean {
   return value.replace(/\\/g, '/').startsWith('/');
 }

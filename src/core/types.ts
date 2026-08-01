@@ -25,6 +25,7 @@ export type SearchMatch = {
   path: string;
   uri?: string;
   relativePath?: string;
+  repositoryRelativePath?: string;
   line: number;
   column: number;
   endColumn: number;

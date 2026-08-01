@@ -16,6 +16,7 @@ import { TagsRebuild } from '../definition/TagsRebuild';
 import { RemoteGitRootGuard } from './RemoteGitRootGuard';
 import { RemoteSearchPreflight } from './RemoteSearchPreflight';
 import { planSearchRequest, type SearchRequestPlan } from './SearchRequestPlan';
+import type { ResolvedSearchRepository, SearchRepository } from '../workspace/WorkspaceResolver';
 
 export class SearchCoordinator {
   private readonly contentSearchRunner: ContentSearchRunner;
@@ -99,6 +100,7 @@ export class SearchCoordinator {
     options: SearchOptions,
     settings: SearchSettings,
     workspaceFolder: vscode.WorkspaceFolder,
+    repositories: SearchRepository[],
     messageRouter: WebviewMessageRouter
   ): Promise<void> {
     const plan = planSearchRequest(options);
@@ -123,9 +125,9 @@ export class SearchCoordinator {
     messageRouter.postResults(plan.mode === 'file' ? 'file' : 'content', [], true, requestId);
     this.session.postPhase('Preparing remote search...');
 
-    let remoteCwd: string;
+    let resolvedRepositories: ResolvedSearchRepository[];
     try {
-      remoteCwd = await this.remoteSearchPreflight.prepare(settings, workspaceFolder, token, messageRouter);
+      resolvedRepositories = await this.remoteSearchPreflight.prepare(settings, workspaceFolder, repositories, token, messageRouter);
     } catch (error) {
       messageRouter.postState({
         type: 'state',
@@ -136,15 +138,16 @@ export class SearchCoordinator {
       return;
     }
 
-    await this.executePlannedSearch(plan, token, options, settings, workspaceFolder, remoteCwd, messageRouter);
+    await this.executePlannedSearch(plan, token, options, settings, resolvedRepositories, messageRouter);
   }
 
   public async executeRebuildTags(
     settings: SearchSettings,
     workspaceFolder: vscode.WorkspaceFolder,
+    repositories: SearchRepository[],
     messageRouter: WebviewMessageRouter
   ): Promise<void> {
-    await this.tagsRebuild.execute(settings, workspaceFolder, messageRouter);
+    await this.tagsRebuild.execute(settings, workspaceFolder, repositories, messageRouter);
   }
 
   private clearSearchResults(messageRouter: WebviewMessageRouter, requestId?: number): void {
@@ -159,22 +162,71 @@ export class SearchCoordinator {
     token: number,
     options: SearchOptions,
     settings: SearchSettings,
-    workspaceFolder: vscode.WorkspaceFolder,
-    remoteCwd: string,
+    repositories: ResolvedSearchRepository[],
     messageRouter: WebviewMessageRouter
   ): Promise<void> {
+    const startedAt = Date.now();
     if (plan.mode === 'file') {
-      await this.fileSearchRunner.execute(token, plan.fileQuery, options, settings, workspaceFolder, remoteCwd, messageRouter);
+      for (let index = 0; index < repositories.length; index += 1) {
+        if (!this.session.isCurrent(token)) {
+          return;
+        }
+        const ok = await this.fileSearchRunner.execute(
+          token,
+          plan.fileQuery,
+          options,
+          settings,
+          repositories[index],
+          messageRouter,
+          index === repositories.length - 1,
+          startedAt
+        );
+        if (!ok) {
+          return;
+        }
+      }
       return;
     }
 
     if (plan.mode === 'definition') {
       this.logger.log(`search#${token} definition-mode query="${plan.query}"`);
-      await this.definitionSearch.execute(token, options, settings, workspaceFolder, remoteCwd, messageRouter);
+      for (let index = 0; index < repositories.length; index += 1) {
+        if (!this.session.isCurrent(token)) {
+          return;
+        }
+        const ok = await this.definitionSearch.execute(
+          token,
+          options,
+          settings,
+          repositories[index],
+          messageRouter,
+          index === repositories.length - 1,
+          startedAt
+        );
+        if (!ok) {
+          return;
+        }
+      }
       this.logger.log(`search#${token} definition-search completed`);
       return;
     }
 
-    await this.contentSearchRunner.execute(token, options, settings, workspaceFolder, remoteCwd, messageRouter);
+    for (let index = 0; index < repositories.length; index += 1) {
+      if (!this.session.isCurrent(token)) {
+        return;
+      }
+      const ok = await this.contentSearchRunner.execute(
+        token,
+        options,
+        settings,
+        repositories[index],
+        messageRouter,
+        index === repositories.length - 1,
+        startedAt
+      );
+      if (!ok) {
+        return;
+      }
+    }
   }
 }

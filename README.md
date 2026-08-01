@@ -11,6 +11,7 @@ Built-in rg for Linux is shipped for the remote; local Windows workspaces are ma
 - No wall-clock timeout: the remote rg process runs until it exits; the extension does not cut off a search by time.
 - No result cap: content search, file search, and definition search are intended to return every matching item subject to exclude globs and ripgrep/ctags semantics.
 - No default include whitelist: searches cover all file names that are not excluded. Use include globs only when you want to narrow the search.
+- Directory exclude globs ending in `/`, such as `power/`, are interpreted relative to the Git repository root. Use `**/power/**` to exclude that directory name at any depth.
 - Streaming results: content search and file search update the webview while remote output is still arriving.
 - UI refresh: ripgrepTool.resultRefreshMs controls how often the webview updates while results stream; it does not stop the search. The default is 80 ms so large searches show partial results quickly.
 - Threads / context: ripgrepTool.threads and ripgrepTool.contextLines are passed through to rg within the ranges in Settings.

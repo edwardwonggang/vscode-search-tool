@@ -1,44 +1,23 @@
 import * as vscode from 'vscode';
 import type { Client } from 'ssh2';
-import * as posixPath from 'path/posix';
 import type { SearchSettings } from '../core/types';
+import { normalizeRemotePath } from '../core/paths';
 import type { TranslationService } from '../i18n/TranslationService';
 import type { RemoteExecutor } from '../remote/RemoteExecutor';
 import type { RemoteToolInstaller } from '../remote/RemoteToolInstaller';
-import type { WorkspaceResolver } from '../workspace/WorkspaceResolver';
+import type { ResolvedSearchRepository, SearchRepository, WorkspaceResolver } from '../workspace/WorkspaceResolver';
 import type { SessionLogger } from '../session/SessionLogger';
-import { buildGitTopCommand, buildGitInsideWorkTreeCommand } from '../remote/commands';
-import { shellEscape } from '../core/shell';
+import { buildGitTopCommand, buildGitInsideWorkTreeCommand, buildExecutableVersionCommand } from '../remote/commands';
 import type { SearchSession } from '../session/SearchSession';
 import type { WebviewMessageRouter } from '../search/WebviewMessageRouter';
 import type { ConnectionController } from '../session/ConnectionController';
-
-const TAGS_FILE_NAME = 'tags';
-const CTAGS_EXCLUDE_PATTERNS = [
-  '*.a',
-  '*.bin',
-  '*.bmp',
-  '*.bz2',
-  '*.dll',
-  '*.elf',
-  '*.exe',
-  '*.gif',
-  '*.gz',
-  '*.hex',
-  '*.iso',
-  '*.jpg',
-  '*.jpeg',
-  '*.lib',
-  '*.o',
-  '*.obj',
-  '*.pdf',
-  '*.png',
-  '*.so',
-  '*.tar',
-  '*.tgz',
-  '*.zip',
-  '*.7z'
-] as const;
+import {
+  TAG_INDEX_CTAGS_ARGS_KEY,
+  buildCtagsRebuildCommand,
+  buildGitHeadCommand,
+  createTagIndexMeta,
+  getTagIndexPaths
+} from './TagIndex';
 const CTAGS_PROGRESS_REFRESH_MS = 500;
 
 export class TagsRebuild {
@@ -55,6 +34,7 @@ export class TagsRebuild {
   public async execute(
     settings: SearchSettings,
     workspaceFolder: vscode.WorkspaceFolder,
+    repositories: SearchRepository[],
     messageRouter: WebviewMessageRouter
   ): Promise<void> {
     if (!this.connectionController.isRemoteSearchConfigured(settings)) {
@@ -75,11 +55,12 @@ export class TagsRebuild {
       ctagsInProgress: false
     });
 
-    let remoteCwd: string;
+    let resolvedRepositories: ResolvedSearchRepository[];
     try {
-      remoteCwd = await this.workspaceResolver.resolveRemoteCwd(
+      resolvedRepositories = await this.workspaceResolver.resolveSearchRepositories(
         settings,
         workspaceFolder,
+        repositories,
         await this.translationService.translate('err_remote_search_path_required')
       );
     } catch (error) {
@@ -101,14 +82,17 @@ export class TagsRebuild {
         client,
         await this.translationService.translate('err_ctags_missing')
       );
-      const gitTop = await this.getRemoteGitTop(client, remoteCwd, token);
-      if (!this.session.isCurrent(token) || !gitTop) {
-        return;
-      }
-      const tagsPath = posixPath.join(posixPath.dirname(gitTop), TAGS_FILE_NAME);
-      await this.runRemoteCtagsBuild(client, ctagsPath, gitTop, tagsPath, token, messageRouter);
-      if (!this.session.isCurrent(token)) {
-        return;
+
+      for (const repository of resolvedRepositories) {
+        this.logger.log(`rebuild-tags#${token} repository="${repository.workspaceRelativePath || '.'}" cwd="${repository.remoteCwd}"`);
+        const gitTop = await this.getRemoteGitTop(client, repository.remoteCwd, token);
+        if (!this.session.isCurrent(token) || !gitTop) {
+          return;
+        }
+        await this.runRemoteCtagsBuild(client, ctagsPath, gitTop, token, messageRouter);
+        if (!this.session.isCurrent(token)) {
+          return;
+        }
       }
       messageRouter.postState({
         type: 'state',
@@ -134,7 +118,7 @@ export class TagsRebuild {
       throw new Error(await this.translationService.translate('err_not_git_workspace'));
     }
     const top = r.stdout.split(/\r?\n/u)[0]?.trim() ?? '';
-    if (!top) {
+    if (!top || normalizeRemotePath(top) !== normalizeRemotePath(remoteCwd)) {
       throw new Error(await this.translationService.translate('err_not_git_workspace'));
     }
     const tree = await this.remoteExecutor.execWithExitCode(client, buildGitInsideWorkTreeCommand(remoteCwd));
@@ -151,7 +135,6 @@ export class TagsRebuild {
     client: Client,
     ctagsPath: string,
     gitTop: string,
-    tagsPath: string,
     token: number,
     messageRouter: WebviewMessageRouter
   ): Promise<void> {
@@ -160,8 +143,20 @@ export class TagsRebuild {
     const buildDoneMessage = await this.translationService.translate('ctags_build_done');
 
     messageRouter.postState({ type: 'state', running: true, summary: buildSummary, ctagsInProgress: true });
-    const excludes = CTAGS_EXCLUDE_PATTERNS.map((pattern) => `--exclude=${shellEscape(pattern)}`).join(' ');
-    const command = `cd ${shellEscape(gitTop)} && ${shellEscape(ctagsPath)} -R -f ${shellEscape(tagsPath)} --tag-relative=yes --fields=+n ${excludes} .`;
+    const tagIndexPaths = getTagIndexPaths(gitTop);
+    const gitHead = await this.getGitHead(client, gitTop);
+    const ctagsVersion = await this.getCtagsVersion(client, ctagsPath);
+    const command = buildCtagsRebuildCommand(
+      ctagsPath,
+      gitTop,
+      tagIndexPaths,
+      createTagIndexMeta({
+        gitTop,
+        gitHead,
+        ctagsVersion,
+        ctagsArgsKey: TAG_INDEX_CTAGS_ARGS_KEY
+      })
+    );
 
     return new Promise((resolve, reject) => {
       client.exec(command, (error, stream) => {
@@ -224,5 +219,15 @@ export class TagsRebuild {
         });
       });
     });
+  }
+
+  private async getGitHead(client: Client, gitTop: string): Promise<string> {
+    const result = await this.remoteExecutor.execWithExitCode(client, buildGitHeadCommand(gitTop));
+    return result.stdout.split(/\r?\n/u)[0]?.trim() ?? '';
+  }
+
+  private async getCtagsVersion(client: Client, ctagsPath: string): Promise<string> {
+    const result = await this.remoteExecutor.execWithExitCode(client, buildExecutableVersionCommand(ctagsPath));
+    return result.stdout.split(/\r?\n/u)[0]?.trim() ?? '';
   }
 }

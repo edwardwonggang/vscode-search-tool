@@ -4,7 +4,7 @@ import type { SearchSettings } from '../core/types';
 import type { SshClientManager } from '../remote/SshClientManager';
 import type { RemoteExecutor } from '../remote/RemoteExecutor';
 import type { RemoteToolInstaller } from '../remote/RemoteToolInstaller';
-import type { WorkspaceResolver } from '../workspace/WorkspaceResolver';
+import type { SearchRepository, WorkspaceResolver } from '../workspace/WorkspaceResolver';
 
 export type ConnectionControllerLogger = {
   log(message: string): void;
@@ -36,6 +36,7 @@ export class ConnectionController {
 
   public async checkConnection(
     settings: SearchSettings,
+    repositories: SearchRepository[],
     onResult: (ok: boolean, message: string, cwd?: string) => void
   ): Promise<void> {
     const startedAt = Date.now();
@@ -54,11 +55,13 @@ export class ConnectionController {
         const workspaceFolder = this.options.getWorkspaceFolder();
         if (workspaceFolder) {
           try {
-            remoteCwd = await this.options.workspaceResolver.resolveRemoteCwd(
+            const resolvedRepositories = await this.options.workspaceResolver.resolveSearchRepositories(
               settings,
               workspaceFolder,
+              repositories,
               'Remote search path required'
             );
+            remoteCwd = resolvedRepositories.map((repository) => repository.remoteCwd).join('\n');
           } catch {
             // cwd resolution failed, continue without it
           }
@@ -71,7 +74,8 @@ export class ConnectionController {
       const baseMessage = reused
         ? `Connection reused (${elapsedMs} ms)`
         : `Connection ready (${elapsedMs} ms)`;
-      const message = remoteCwd ? `${baseMessage} [${remoteCwd}]` : baseMessage;
+      const repositorySuffix = repositories.length > 1 ? `, ${repositories.length} repositories` : '';
+      const message = remoteCwd ? `${baseMessage}${repositorySuffix} [${remoteCwd}]` : `${baseMessage}${repositorySuffix}`;
       onResult(true, message, remoteCwd);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

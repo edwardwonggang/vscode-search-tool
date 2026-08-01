@@ -13,7 +13,9 @@ export function createResultPathFilter(
 ): (relativePath: string) => boolean {
   const settingsIncludeGlobs = settings.includeGlobs;
   const userIncludeGlobs = splitUserGlobs(options.include);
-  const excludeGlobs = [...settings.excludeGlobs, ...splitUserGlobs(options.exclude)];
+  const excludeGlobs = [...settings.excludeGlobs, ...splitUserGlobs(options.exclude)]
+    .map(normalizeExcludeGlobForSearch)
+    .filter(Boolean);
 
   return (relativePath: string): boolean => {
     const normalizedPath = normalizeSearchPath(relativePath);
@@ -29,6 +31,21 @@ export function createResultPathFilter(
     }
     return !excludeGlobs.some((glob) => matchSearchGlob(normalizedPath, glob));
   };
+}
+
+export function normalizeExcludeGlobForSearch(glob: string): string {
+  const trimmed = String(glob).trim();
+  if (!trimmed) {
+    return '';
+  }
+  const normalized = normalizeSearchPath(trimmed);
+  if (!normalized) {
+    return '';
+  }
+  if (!/[\\/]$/.test(trimmed)) {
+    return normalized;
+  }
+  return normalized.endsWith('/**') ? normalized : `${normalized}/**`;
 }
 
 export function createFileQueryMatcher(query: string, caseSensitive: boolean): (relativePath: string) => boolean {
