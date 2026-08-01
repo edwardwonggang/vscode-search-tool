@@ -4,14 +4,15 @@ export type WebviewMessage =
   | { type: 'state'; payload: StatePayload }
   | { type: 'settings'; payload: unknown }
   | { type: 'connectionResult'; payload: ConnectionResultPayload }
-  | { type: 'gitRootRequired'; payload: GitRootRequiredPayload }
+  | { type: 'workspaceBlocked'; payload: WorkspaceBlockedPayload }
   | { type: 'focus' };
 
 export type BootstrapPayload = {
   workspaceName: string;
   workspacePath: string;
-  gitRootOk: boolean;
-  gitError?: string;
+  workspaceOk: boolean;
+  workspaceError?: string;
+  hasGit: boolean;
   repositories?: Array<{
     name: string;
     relativePath: string;
@@ -61,7 +62,7 @@ export type ConnectionResultPayload = {
   cwd?: string;
 };
 
-export type GitRootRequiredPayload = {
+export type WorkspaceBlockedPayload = {
   message: string;
   workspacePath: string;
 };
@@ -108,9 +109,9 @@ export class WebviewMessageRouter {
     this.view?.postMessage({ type: 'connectionResult', payload: result });
   }
 
-  public postGitRootRequired(message: string, workspacePath: string): void {
+  public postWorkspaceBlocked(message: string, workspacePath: string): void {
     this.view?.postMessage({
-      type: 'gitRootRequired',
+      type: 'workspaceBlocked',
       payload: { message, workspacePath }
     });
   }

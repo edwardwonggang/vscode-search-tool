@@ -55,13 +55,12 @@ export class ConnectionController {
         const workspaceFolder = this.options.getWorkspaceFolder();
         if (workspaceFolder) {
           try {
-            const resolvedRepositories = await this.options.workspaceResolver.resolveSearchRepositories(
+            const searchRoot = await this.options.workspaceResolver.resolveWorkspaceSearchRoot(
               settings,
               workspaceFolder,
-              repositories,
               'Remote search path required'
             );
-            remoteCwd = resolvedRepositories.map((repository) => repository.remoteCwd).join('\n');
+            remoteCwd = searchRoot.remoteCwd;
           } catch {
             // cwd resolution failed, continue without it
           }
@@ -74,7 +73,7 @@ export class ConnectionController {
       const baseMessage = reused
         ? `Connection reused (${elapsedMs} ms)`
         : `Connection ready (${elapsedMs} ms)`;
-      const repositorySuffix = repositories.length > 1 ? `, ${repositories.length} repositories` : '';
+      const repositorySuffix = repositories.length > 0 ? `, ${repositories.length} Git root(s)` : '';
       const message = remoteCwd ? `${baseMessage}${repositorySuffix} [${remoteCwd}]` : `${baseMessage}${repositorySuffix}`;
       onResult(true, message, remoteCwd);
     } catch (error) {

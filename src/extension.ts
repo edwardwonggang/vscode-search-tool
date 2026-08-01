@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import { normalizeSettings } from './core/settings';
+import { inferRemoteWorkspacePath, normalizeRemotePath } from './core/paths';
 import { escapeHtml } from './core/text';
 import type { SearchMatch, SearchOptions, SearchSettings } from './core/types';
 import { buildIconUris, renderFallbackHtml, renderSearchViewHtml } from './webview/SearchViewHtml';
@@ -9,7 +10,6 @@ import { createServices, type Services } from './session/ServiceFactory';
 import { resolveMatchSelection } from './search/MatchNavigation';
 import type { SearchRepository, WorkspaceInfo } from './workspace/WorkspaceResolver';
 
-const SEARCH_SETTINGS_KEY = 'ripgrepTool.searchSettings';
 const SEARCH_VIEW_HTML_RELATIVE_PATH = 'media/search-view.html';
 const SEARCH_VIEW_CSS_RELATIVE_PATH = 'media/search-view.css';
 const SEARCH_RESULTS_RENDERER_JS_RELATIVE_PATH = 'media/search-results-renderer.js';
@@ -97,7 +97,7 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
           void this.autoConnectIfReady('view ready');
           break;
         case 'search':
-          if (await this.ensureWorkspaceGitRootForFeature()) {
+          if (await this.ensureWorkspaceUsable()) {
             const payload = message.payload as SearchOptions;
             const requestId = Number.isFinite(payload.requestId) ? Number(payload.requestId) : 0;
             if (requestId && requestId < this.latestSearchRequestId) {
@@ -115,13 +115,19 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
           }
           break;
         case 'rebuildTags':
-          if (await this.ensureWorkspaceGitRootForFeature()) {
+          if (await this.ensureWorkspaceUsable() && this.workspaceInfo?.hasGit) {
             await this.services.searchCoordinator.executeRebuildTags(
               this.getSettings(),
               vscode.workspace.workspaceFolders![0],
               this.workspaceInfo?.repositories ?? [],
               this.services.messageRouter
             );
+          } else if (this.workspaceInfo && !this.workspaceInfo.hasGit) {
+            this.services.messageRouter.postState({
+              type: 'state',
+              running: false,
+              error: await this.services.translationService.translate('definition_requires_git')
+            });
           }
           break;
         case 'open':
@@ -131,12 +137,12 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
           this.logWebviewTrace(message.payload);
           break;
         case 'saveSettings':
-          if (await this.ensureWorkspaceGitRootForFeature()) {
+          if (await this.ensureWorkspaceUsable()) {
             await this.saveSettings(message.payload as SearchSettings);
           }
           break;
         case 'connect':
-          if (await this.ensureWorkspaceGitRootForFeature()) {
+          if (await this.ensureWorkspaceUsable()) {
             await this.services.connectionController.checkConnection(
               normalizeSettings(message.payload as SearchSettings),
               this.workspaceInfo?.repositories ?? [],
@@ -155,10 +161,7 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     this.services.messageRouter.postFocus();
   }
 
-  public async focusIfWorkspaceGitRoot(): Promise<void> {
-    if (!await this.ensureWorkspaceGitRootForFeature()) {
-      return;
-    }
+  public async focusSearch(): Promise<void> {
     this.focus();
   }
 
@@ -216,8 +219,9 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     this.services.messageRouter.postBootstrap({
       workspaceName,
       workspacePath: workspaceInfo.displayPath,
-      gitRootOk: workspaceInfo.gitRootOk,
-      gitError: workspaceInfo.gitError,
+      workspaceOk: workspaceInfo.workspaceOk,
+      workspaceError: workspaceInfo.workspaceError,
+      hasGit: workspaceInfo.hasGit,
       repositories: workspaceInfo.repositories.map(toRepositoryPayload),
       settings: this.getSettings(),
       translations: await this.services.translationService.getTranslations(),
@@ -236,7 +240,7 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
       return;
     }
     const workspaceInfo = await this.getWorkspaceInfo();
-    if (!workspaceInfo.gitRootOk) {
+    if (!workspaceInfo.workspaceOk) {
       this.stopKeepalive();
       return;
     }
@@ -293,23 +297,23 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
   private async getWorkspaceInfo(): Promise<WorkspaceInfo> {
     const info = await this.services.workspaceResolver.getWorkspaceInfo({
       workspaceNone: await this.services.translationService.translate('workspace_none'),
-      gitRootRequired: await this.services.translationService.translate('git_root_required'),
+      remoteWorkspaceUnsupported: await this.services.translationService.translate('remote_workspace_unsupported'),
       remoteSearchPathRequired: await this.services.translationService.translate('err_remote_search_path_required')
     });
     this.workspaceInfo = info;
     return info;
   }
 
-  private async ensureWorkspaceGitRootForFeature(): Promise<boolean> {
+  private async ensureWorkspaceUsable(): Promise<boolean> {
     const workspaceInfo = await this.getWorkspaceInfo();
-    if (workspaceInfo.gitRootOk) {
+    if (workspaceInfo.workspaceOk) {
       return true;
     }
-    const message = workspaceInfo.gitError || await this.services.translationService.translate('git_root_required');
+    const message = workspaceInfo.workspaceError || await this.services.translationService.translate('workspace_none');
     this.services.session.cancelActiveSearch();
     this.services.resultStore.clear();
     this.services.messageRouter.postResults('content', []);
-    this.services.messageRouter.postGitRootRequired(message, workspaceInfo.displayPath);
+    this.services.messageRouter.postWorkspaceBlocked(message, workspaceInfo.displayPath);
     this.services.messageRouter.postState({ type: 'state', running: false, error: message });
     return false;
   }
@@ -319,15 +323,48 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     this.services.logger.log(
       `save-settings host=${normalized.remoteHost || '<empty>'}:${normalized.remotePort} user=${normalized.remoteUsername || '<empty>'} passwordPresent=${normalized.remotePassword ? 'true' : 'false'}`
     );
-    await this.context.globalState.update(SEARCH_SETTINGS_KEY, normalized);
+    await this.services.settingsStore.saveSshSettings(normalized);
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    const inferredPath = this.inferProjectRemotePath(normalized.remoteUsername, workspaceFolder);
+    const projectPath = inferredPath || normalizeRemotePath(normalized.remoteSearchPath);
+    if (projectPath) {
+      await this.services.settingsStore.saveProjectSettings(projectPath, {
+        remoteSearchPath: normalized.remoteSearchPath,
+        includeGlobs: normalized.includeGlobs,
+        excludeGlobs: normalized.excludeGlobs
+      });
+    }
     this.services.messageRouter.postMessage({ type: 'settings', payload: normalized } as any);
     this.services.messageRouter.postState({ type: 'state', running: false, summary: 'Settings saved' });
     void this.autoConnectIfReady('settings saved');
   }
 
   private getSettings(): SearchSettings {
-    const saved = this.context.globalState.get<SearchSettings>(SEARCH_SETTINGS_KEY);
-    return normalizeSettings(saved);
+    const ssh = this.services.settingsStore.getSshSettings();
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    const inferredPath = this.inferProjectRemotePath(ssh.remoteUsername, workspaceFolder);
+    const project = inferredPath
+      ? this.services.settingsStore.getProjectSettings(inferredPath)
+      : { remoteSearchPath: '', includeGlobs: [], excludeGlobs: [] };
+    const normalizedProject = normalizeSettings({
+      ...ssh,
+      remoteSearchPath: project.remoteSearchPath,
+      includeGlobs: project.includeGlobs,
+      excludeGlobs: project.excludeGlobs
+    });
+    return {
+      ...ssh,
+      remoteSearchPath: normalizedProject.remoteSearchPath || inferredPath || '',
+      includeGlobs: normalizedProject.includeGlobs,
+      excludeGlobs: normalizedProject.excludeGlobs
+    };
+  }
+
+  private inferProjectRemotePath(remoteUsername: string, workspaceFolder: vscode.WorkspaceFolder | undefined): string {
+    if (!workspaceFolder || workspaceFolder.uri.scheme !== 'file') {
+      return '';
+    }
+    return inferRemoteWorkspacePath(workspaceFolder.uri.fsPath, remoteUsername) ?? '';
   }
 
   private enqueueOpenMatch(match: SearchMatch): void {
@@ -451,7 +488,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand('ripgrepTool.focusSearch', async () => {
       await vscode.commands.executeCommand('workbench.view.extension.ripgrepTool');
-      await provider.focusIfWorkspaceGitRoot();
+      await provider.focusSearch();
     }),
     vscode.commands.registerCommand('ripgrepTool.openLogFile', async () => {
       try {

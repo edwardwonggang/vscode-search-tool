@@ -4,7 +4,6 @@ import * as vscode from 'vscode';
 import { normalizeSearchPath } from '../core/glob';
 import {
   inferRemoteWorkspacePath,
-  isPosixAbsolutePath,
   normalizeRemotePath,
   joinRemotePath
 } from '../core/paths';
@@ -20,8 +19,9 @@ import {
 
 export type WorkspaceInfo = {
   displayPath: string;
-  gitRootOk: boolean;
-  gitError?: string;
+  workspaceOk: boolean;
+  workspaceError?: string;
+  hasGit: boolean;
   repositories: SearchRepository[];
 };
 
@@ -46,7 +46,7 @@ export type ResolvedSearchRepository = SearchRepository & {
 
 export type WorkspaceResolverTranslations = {
   workspaceNone: string;
-  gitRootRequired: string;
+  remoteWorkspaceUnsupported: string;
   remoteSearchPathRequired: string;
 };
 
@@ -58,18 +58,28 @@ export class WorkspaceResolver {
     if (!workspaceFolder) {
       return {
         displayPath: translations.workspaceNone,
-        gitRootOk: false,
-        gitError: translations.gitRootRequired,
+        workspaceOk: false,
+        workspaceError: translations.workspaceNone,
+        hasGit: false,
+        repositories: []
+      };
+    }
+
+    if (workspaceFolder.uri.scheme !== 'file') {
+      return {
+        displayPath: formatWorkspaceDisplayPath(workspaceFolder.uri),
+        workspaceOk: false,
+        workspaceError: translations.remoteWorkspaceUnsupported,
+        hasGit: false,
         repositories: []
       };
     }
 
     const repositories = await this.discoverGitRepositories(workspaceFolder.uri);
-    const gitRootOk = repositories.length > 0;
     return {
       displayPath: formatWorkspaceDisplayPath(workspaceFolder.uri),
-      gitRootOk,
-      gitError: gitRootOk ? undefined : translations.gitRootRequired,
+      workspaceOk: true,
+      hasGit: repositories.length > 0,
       repositories
     };
   }
@@ -83,11 +93,8 @@ export class WorkspaceResolver {
     if (userConfiguredPath) {
       return normalizeRemotePath(userConfiguredPath);
     }
-    if (workspaceFolder.uri.scheme === 'vscode-remote' && workspaceFolder.uri.path) {
-      return normalizeRemotePath(workspaceFolder.uri.path);
-    }
-    if (vscode.env.remoteName && isPosixAbsolutePath(workspaceFolder.uri.fsPath)) {
-      return normalizeRemotePath(workspaceFolder.uri.fsPath);
+    if (workspaceFolder.uri.scheme !== 'file') {
+      throw new Error(remoteSearchPathRequiredMessage);
     }
 
     const inferredPath = inferRemoteWorkspacePath(workspaceFolder.uri.fsPath, settings.remoteUsername);
@@ -96,6 +103,33 @@ export class WorkspaceResolver {
     }
 
     throw new Error(remoteSearchPathRequiredMessage);
+  }
+
+  /**
+   * 普通内容/文件搜索使用工作区根目录作为唯一搜索根。
+   */
+  public async resolveWorkspaceSearchRoot(
+    settings: SearchSettings,
+    workspaceFolder: vscode.WorkspaceFolder,
+    remoteSearchPathRequiredMessage: string
+  ): Promise<ResolvedSearchRepository> {
+    const remoteWorkspaceRoot = await this.resolveRemoteCwd(settings, workspaceFolder, remoteSearchPathRequiredMessage);
+    return {
+      ...this.createWorkspaceSearchRepository(workspaceFolder),
+      remoteCwd: remoteWorkspaceRoot
+    };
+  }
+
+  /**
+   * 定义搜索/ctags 使用发现的 Git 根目录，逐仓库建立独立搜索目标。
+   */
+  public createWorkspaceSearchRepository(workspaceFolder: vscode.WorkspaceFolder): SearchRepository {
+    return {
+      name: workspaceFolder.name,
+      workspaceRelativePath: '',
+      localUri: workspaceFolder.uri,
+      displayPath: formatWorkspaceDisplayPath(workspaceFolder.uri)
+    };
   }
 
   public async resolveSearchRepositories(

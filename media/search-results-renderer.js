@@ -7,10 +7,10 @@
     constructor(options) {
       this.resultsEl = options.resultsEl;
       this.collapsedFiles = options.collapsedFiles;
-      this.isGitRootOk = options.isGitRootOk;
-      this.getGitRootMessage = options.getGitRootMessage;
+      this.isWorkspaceOk = options.isWorkspaceOk;
+      this.getWorkspaceMessage = options.getWorkspaceMessage;
       this.getIsFileSearch = options.getIsFileSearch;
-      this.renderGitRootRequired = options.renderGitRootRequired;
+      this.renderWorkspaceBlocked = options.renderWorkspaceBlocked;
       this.renderEmpty = options.renderEmpty;
       this.renderFileIcon = options.renderFileIcon;
       this.formatPreview = options.formatPreview;
@@ -65,8 +65,8 @@
     }
 
     render() {
-      if (!this.isGitRootOk()) {
-        this.renderGitRootRequired(this.getGitRootMessage());
+      if (!this.isWorkspaceOk()) {
+        this.renderWorkspaceBlocked(this.getWorkspaceMessage());
         return;
       }
       const isFileSearch = this.getIsFileSearch();

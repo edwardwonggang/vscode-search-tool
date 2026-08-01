@@ -24,6 +24,7 @@ import {
   normalizeRemotePath
 } from '../src/core/paths';
 import { normalizeSettings } from '../src/core/settings';
+import { createProjectSettingsKey, SettingsStore, type SettingsStorage } from '../src/core/SettingsStore';
 import { shellEscape } from '../src/core/shell';
 import { createSearchPreview, escapeHtml, utf8ByteOffsetToUtf16Index } from '../src/core/text';
 import type { SearchOptions, SearchSettings } from '../src/core/types';
@@ -86,6 +87,18 @@ function baseSettings(overrides: Partial<SearchSettings> = {}): SearchSettings {
     includeGlobs: [],
     excludeGlobs: [],
     ...overrides
+  };
+}
+
+function createMemorySettingsStorage(): SettingsStorage {
+  const values = new Map<string, unknown>();
+  return {
+    get<T>(key: string): T | undefined {
+      return values.get(key) as T | undefined;
+    },
+    async update(key: string, value: unknown): Promise<void> {
+      values.set(key, value);
+    }
   };
 }
 
@@ -162,7 +175,72 @@ test('search paths and globs match existing include and exclude behavior', () =>
   assert.equal(defaultFilter('tools/run'), true);
   assert.equal(defaultFilter('web/index.html'), true);
   assert.equal(defaultFilter('docs/readme.txt'), true);
-  assert.equal(defaultFilter('node_modules/pkg/source.c'), true);
+  assert.equal(defaultFilter('node_modules/pkg/source.c'), false);
+});
+
+test('default excludes include node_modules', () => {
+  assert.ok(DEFAULT_EXCLUDE_GLOBS.includes('**/node_modules/**'));
+  const filter = createResultPathFilter(baseOptions(), normalizeSettings(undefined));
+  assert.equal(filter('node_modules/pkg/source.c'), false);
+  assert.equal(filter('lib/source.c'), true);
+});
+
+test('project settings keys normalize remote paths', () => {
+  assert.equal(createProjectSettingsKey('/home/wanggang/aaa'), createProjectSettingsKey('/home/wanggang/aaa/'));
+  assert.ok(createProjectSettingsKey('/home/wanggang/aaa').startsWith('ripgrepTool.projectSettings.'));
+  assert.throws(() => createProjectSettingsKey(''));
+});
+
+test('settings store separates SSH globals from per-project settings', async () => {
+  const store = new SettingsStore(createMemorySettingsStorage());
+  await store.saveSshSettings({
+    remoteHost: 'host',
+    remotePort: 22,
+    remoteUsername: 'wanggang',
+    remotePassword: 'pw'
+  });
+  await store.saveProjectSettings('/home/wanggang/aaa', {
+    remoteSearchPath: '/home/wanggang/aaa',
+    includeGlobs: ['*.ts'],
+    excludeGlobs: ['**/*.snap']
+  });
+
+  const ssh = store.getSshSettings();
+  assert.equal(ssh.remoteHost, 'host');
+  assert.equal(ssh.remoteUsername, 'wanggang');
+
+  const project = store.getProjectSettings('/home/wanggang/aaa');
+  assert.equal(project.remoteSearchPath, '/home/wanggang/aaa');
+  assert.deepEqual(project.includeGlobs, ['*.ts']);
+  assert.deepEqual(project.excludeGlobs, ['**/*.snap']);
+
+  const other = store.getProjectSettings('/home/wanggang/bbb');
+  assert.equal(other.remoteSearchPath, '');
+  assert.deepEqual(other.includeGlobs, DEFAULT_INCLUDE_GLOBS);
+  assert.ok(other.excludeGlobs.includes('**/node_modules/**'));
+});
+
+test('settings store falls back to legacy global settings', async () => {
+  const storage = createMemorySettingsStorage();
+  await storage.update('ripgrepTool.searchSettings', {
+    remoteHost: 'legacy-host',
+    remotePort: 2222,
+    remoteUsername: 'legacy-user',
+    remotePassword: 'legacy-pw',
+    remoteSearchPath: '/home/legacy/project',
+    includeGlobs: ['*.c'],
+    excludeGlobs: ['**/*.o']
+  });
+  const store = new SettingsStore(storage);
+
+  const ssh = store.getSshSettings();
+  assert.equal(ssh.remoteHost, 'legacy-host');
+  assert.equal(ssh.remotePort, 2222);
+
+  const project = store.getProjectSettings('/home/legacy/project');
+  assert.equal(project.remoteSearchPath, '/home/legacy/project');
+  assert.deepEqual(project.includeGlobs, ['*.c']);
+  assert.deepEqual(project.excludeGlobs, ['**/*.o']);
 });
 
 test('exclude directory globs are root-relative unless explicitly recursive', () => {

@@ -15,7 +15,7 @@ username_label,Username,用户名
 password_label,Password,密码
 remote_search_path_label,Remote Search Path (optional),远端搜索路径（可选）
 remote_search_path_placeholder,/home/wanggang/src/dmu/hvli/trunk,/home/wanggang/src/dmu/hvli/trunk
-current_remote_path_label,Search Repositories,搜索仓库
+current_remote_path_label,Current Remote Path,当前远端路径
 filters_section_title,Filters,过滤
 include_globs_label,"Included file globs, one per line","包含文件 glob，每行一个"
 exclude_globs_label,"Excluded globs, one per line","排除 glob，每行一个"
@@ -26,6 +26,8 @@ connection_ready,SSH connected in {elapsedMs} ms,SSH 已连接（{elapsedMs} ms�
 connection_reused,SSH connection reused in {elapsedMs} ms,SSH 连接复用（{elapsedMs} ms）
 workspace_none,No workspace,未打开工作区
 git_root_required,Open a workspace that contains at least one Git repository within 3 folder levels.,请打开 3 层目录内至少包含一个 Git 仓库的工作区。
+remote_workspace_unsupported,Remote-SSH workspaces are not supported. Open a local drive or UNC folder.,不支持 Remote-SSH 工作区，请用本地盘符或 UNC 路径打开。
+definition_requires_git,Definition search requires at least one Git directory.,定义搜索需要至少一个 Git 目录。
 reset_button,Reset,重置
 save_button,Save,保存
 query_placeholder,Search,搜索
