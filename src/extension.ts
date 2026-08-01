@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import { normalizeSettings } from './core/settings';
-import { inferRemoteWorkspacePath, normalizeRemotePath } from './core/paths';
+import { inferRemoteWorkspacePath, normalizeRemotePath, sameLocalPath } from './core/paths';
 import { escapeHtml } from './core/text';
 import type { SearchMatch, SearchOptions, SearchSettings } from './core/types';
 import { buildIconUris, renderFallbackHtml, renderSearchViewHtml } from './webview/SearchViewHtml';
@@ -542,6 +542,10 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     const startedAt = Date.now();
     this.services.logger.log(`open start uri=${nextUri.toString()} path=${match.path} line=${match.line} column=${match.column}`);
     try {
+      // 转到定义且目标就在当前文件中：直接在当前编辑器跳转，不新开 Tab。
+      if (newTab && this.tryJumpInActiveEditor(nextUri, match, startedAt)) {
+        return;
+      }
       const visibleEditor = this.findVisibleEditor(nextUri);
       const document = visibleEditor?.document ?? await vscode.workspace.openTextDocument(nextUri);
       const selection = this.createSelection(document, match);
@@ -554,7 +558,8 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
         selection
       };
       if (newTab) {
-        showOptions.viewColumn = vscode.ViewColumn.Beside;
+        // 转到定义新 Tab：在同一编辑组内打开普通新标签，不做左右拆分。
+        showOptions.viewColumn = vscode.ViewColumn.Active;
       } else {
         this.invalidateSearchResultViewColumnIfEmpty();
         if (this.searchResultViewColumn !== undefined) {
@@ -577,6 +582,28 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
         await this.services.translationService.format('open_failed', { message })
       );
     }
+  }
+
+  /**
+   * 目标文件与当前活动编辑器相同（转到定义）时，直接在当前编辑器内跳转到定义位置。
+   * @returns 已在当前编辑器内跳转返回 true，否则返回 false。
+   */
+  private tryJumpInActiveEditor(targetUri: vscode.Uri, match: SearchMatch, startedAt: number): boolean {
+    const activeEditor = vscode.window.activeTextEditor;
+    if (
+      !activeEditor ||
+      activeEditor.document.uri.scheme !== targetUri.scheme ||
+      !sameLocalPath(activeEditor.document.uri.fsPath, targetUri.fsPath)
+    ) {
+      return false;
+    }
+    const selection = this.createSelection(activeEditor.document, match);
+    activeEditor.selection = selection;
+    activeEditor.revealRange(selection, vscode.TextEditorRevealType.InCenter);
+    this.services.logger.log(
+      `open in current editor uri=${targetUri.toString()} line=${selection.start.line + 1} column=${selection.start.character + 1}`
+    );
+    return true;
   }
 
   private findVisibleEditor(uri: vscode.Uri): vscode.TextEditor | undefined {

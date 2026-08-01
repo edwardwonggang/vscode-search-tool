@@ -83,6 +83,13 @@ export function normalizeLocalPath(value: string): string {
     .toLowerCase();
 }
 
+/**
+ * 判断两个本地文件路径是否指向同一文件（忽略盘符大小写、斜杠方向与重复/尾部斜杠）。
+ */
+export function sameLocalPath(a: string, b: string): boolean {
+  return normalizeLocalPath(a) === normalizeLocalPath(b);
+}
+
 export function joinFileWorkspacePath(workspaceFsPath: string, relativePath: string): string {
   const normalizedRelativePath = normalizeSearchPath(relativePath);
   return path.join(workspaceFsPath, normalizedRelativePath.replace(/\//gu, path.sep));
