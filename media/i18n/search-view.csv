@@ -14,7 +14,7 @@ port_label,Port,端口
 username_label,Username,用户名
 password_label,Password,密码
 remote_search_path_label,Remote Search Path (optional),远端搜索路径（可选）
-remote_search_path_placeholder,/home/wanggang/src/dmu/hvli/trunk,/home/wanggang/src/dmu/hvli/trunk
+remote_search_path_placeholder,"Example: /home/wanggang/src/dmu/hvli/trunk","示例：/home/wanggang/src/dmu/hvli/trunk"
 current_remote_path_label,Current Remote Path,当前远端路径
 filters_section_title,Filters,过滤
 include_globs_label,"Included file globs, one per line","包含文件 glob，每行一个"

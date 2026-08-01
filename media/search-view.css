@@ -909,7 +909,7 @@ mark {
 
 .modalInput::placeholder,
 .settingsTextarea::placeholder {
-  color: color-mix(in srgb, var(--muted) 80%, transparent);
+  color: color-mix(in srgb, var(--muted) 55%, transparent);
   opacity: 1;
 }
 
