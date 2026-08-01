@@ -54,7 +54,6 @@ def_searching,Resolving symbol…,正在解析符号…
 def_no_results,No definition matches,无定义匹配
 goto_def_no_symbol,No symbol under the cursor.,光标处没有可识别的符号。
 goto_def_not_found,No definition found for {symbol}.,未找到 {symbol} 的定义。
-goto_def_picker_placeholder,Select a definition for {symbol},选择 {symbol} 的定义
 goto_def_failed,Definition search failed: {message},定义搜索失败：{message}
 render_timing,rendered in {elapsedMs} ms,渲染 {elapsedMs} ms
 rebuild_tags_button,Rebuild tags,重建 tags

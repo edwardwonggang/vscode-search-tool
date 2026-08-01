@@ -9,6 +9,7 @@ import { buildIconUris, renderFallbackHtml, renderSearchViewHtml } from './webvi
 import { createServices, type Services } from './session/ServiceFactory';
 import { resolveMatchSelection } from './search/MatchNavigation';
 import type { SearchRepository, WorkspaceInfo } from './workspace/WorkspaceResolver';
+import { DefinitionPicker } from './definition/DefinitionPicker';
 
 const SEARCH_VIEW_HTML_RELATIVE_PATH = 'media/search-view.html';
 const SEARCH_VIEW_CSS_RELATIVE_PATH = 'media/search-view.css';
@@ -67,6 +68,7 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
   private searchResultViewColumn?: vscode.ViewColumn;
   private queuedOpenMatch?: SearchMatch;
   private queuedOpenMatchNewTab = false;
+  private definitionPicker: DefinitionPicker;
   private openingMatch = false;
   private keepaliveTimer?: NodeJS.Timeout;
   private autoConnectInFlight = false;
@@ -74,6 +76,7 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.services = createServices(context);
+    this.definitionPicker = new DefinitionPicker(context);
     this.context.subscriptions.push(this.services.logger);
   }
 
@@ -226,22 +229,13 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    const pick = vscode.window.createQuickPick<vscode.QuickPickItem & { match?: SearchMatch }>();
-    pick.placeholder = await this.services.translationService.format('goto_def_picker_placeholder', { symbol });
-    pick.items = uniqueMatches.map((match) => ({
-      label: match.relativePath || match.path,
-      description: `${match.line}:${match.column}`,
-      detail: match.preview,
-      match
-    }));
-    pick.onDidAccept(() => {
-      const selected = pick.selectedItems[0];
-      pick.dispose();
-      if (selected?.match) {
-        this.enqueueOpenMatch(selected.match, true);
+    await this.definitionPicker.show({
+      symbol,
+      matches: uniqueMatches,
+      onSelect: (match) => {
+        this.enqueueOpenMatch(match, true);
       }
     });
-    pick.show();
   }
 
   public async openLogFileInEditor(): Promise<void> {
@@ -263,6 +257,7 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
 
   public dispose(): void {
     this.stopKeepalive();
+    this.definitionPicker.disposePanel();
     this.services.session.dispose();
     this.services.connectionController.close('provider disposed');
   }
