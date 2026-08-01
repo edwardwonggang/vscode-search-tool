@@ -66,6 +66,7 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
   private workspaceInfo?: WorkspaceInfo;
   private searchResultViewColumn?: vscode.ViewColumn;
   private queuedOpenMatch?: SearchMatch;
+  private queuedOpenMatchNewTab = false;
   private openingMatch = false;
   private keepaliveTimer?: NodeJS.Timeout;
   private autoConnectInFlight = false;
@@ -221,7 +222,7 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
       return;
     }
     if (uniqueMatches.length === 1) {
-      this.enqueueOpenMatch(uniqueMatches[0]);
+      this.enqueueOpenMatch(uniqueMatches[0], true);
       return;
     }
 
@@ -237,7 +238,7 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
       const selected = pick.selectedItems[0];
       pick.dispose();
       if (selected?.match) {
-        this.enqueueOpenMatch(selected.match);
+        this.enqueueOpenMatch(selected.match, true);
       }
     });
     pick.show();
@@ -450,12 +451,13 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     return inferRemoteWorkspacePath(workspaceFolder.uri.fsPath, remoteUsername) ?? '';
   }
 
-  private enqueueOpenMatch(match: SearchMatch): void {
+  private enqueueOpenMatch(match: SearchMatch, newTab = false): void {
     if (!match || (!match.uri && !match.path)) {
       this.services.logger.log('open ignored: missing match uri/path');
       return;
     }
     this.queuedOpenMatch = match;
+    this.queuedOpenMatchNewTab = newTab;
     if (this.openingMatch) {
       return;
     }
@@ -481,8 +483,10 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     try {
       while (this.queuedOpenMatch) {
         const match = this.queuedOpenMatch;
+        const newTab = this.queuedOpenMatchNewTab;
         this.queuedOpenMatch = undefined;
-        await this.openMatch(match);
+        this.queuedOpenMatchNewTab = false;
+        await this.openMatch(match, newTab);
       }
     } finally {
       this.openingMatch = false;
@@ -492,7 +496,7 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async openMatch(match: SearchMatch): Promise<void> {
+  private async openMatch(match: SearchMatch, newTab = false): Promise<void> {
     const nextUri = match.uri ? vscode.Uri.parse(match.uri, true) : vscode.Uri.file(match.path);
     const startedAt = Date.now();
     this.services.logger.log(`open start uri=${nextUri.toString()} path=${match.path} line=${match.line} column=${match.column}`);
@@ -504,18 +508,24 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
         `open selection uri=${nextUri.toString()} line=${selection.start.line + 1} column=${selection.start.character + 1}`
       );
       const showOptions: vscode.TextDocumentShowOptions = {
-        preview: true,
+        preview: !newTab,
         preserveFocus: false,
         selection
       };
-      this.invalidateSearchResultViewColumnIfEmpty();
-      if (this.searchResultViewColumn !== undefined) {
-        showOptions.viewColumn = this.searchResultViewColumn;
+      if (newTab) {
+        showOptions.viewColumn = vscode.ViewColumn.Beside;
+      } else {
+        this.invalidateSearchResultViewColumnIfEmpty();
+        if (this.searchResultViewColumn !== undefined) {
+          showOptions.viewColumn = this.searchResultViewColumn;
+        }
       }
       const editor = visibleEditor
         ? await vscode.window.showTextDocument(visibleEditor.document, showOptions)
         : await vscode.window.showTextDocument(document, showOptions);
-      this.searchResultViewColumn = editor.viewColumn;
+      if (!newTab) {
+        this.searchResultViewColumn = editor.viewColumn;
+      }
       editor.selection = selection;
       editor.revealRange(selection, vscode.TextEditorRevealType.InCenter);
       this.services.logger.log(`open done elapsed=${Date.now() - startedAt} ms uri=${nextUri.toString()}`);
