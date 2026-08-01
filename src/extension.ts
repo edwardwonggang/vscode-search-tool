@@ -9,7 +9,6 @@ import { buildIconUris, renderFallbackHtml, renderSearchViewHtml } from './webvi
 import { createServices, type Services } from './session/ServiceFactory';
 import { resolveMatchSelection } from './search/MatchNavigation';
 import type { SearchRepository, WorkspaceInfo } from './workspace/WorkspaceResolver';
-import { DefinitionPicker } from './definition/DefinitionPicker';
 
 const SEARCH_VIEW_HTML_RELATIVE_PATH = 'media/search-view.html';
 const SEARCH_VIEW_CSS_RELATIVE_PATH = 'media/search-view.css';
@@ -68,8 +67,6 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
   private searchResultViewColumn?: vscode.ViewColumn;
   private queuedOpenMatch?: SearchMatch;
   private queuedOpenMatchNewTab = false;
-  private definitionPicker: DefinitionPicker;
-  private definitionHintDecoration?: vscode.TextEditorDecorationType;
   private workspaceInfoCache?: { at: number; info: WorkspaceInfo };
   private openingMatch = false;
   private keepaliveTimer?: NodeJS.Timeout;
@@ -78,7 +75,6 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.services = createServices(context);
-    this.definitionPicker = new DefinitionPicker(context);
     this.context.subscriptions.push(this.services.logger);
   }
 
@@ -188,63 +184,58 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
       return;
     }
 
-    this.showDefinitionHint(editor, range, 'Searching definitions…');
-    try {
-      const workspaceInfo = await this.getCachedWorkspaceInfo();
-      if (!workspaceInfo.workspaceOk) {
-        this.clearDefinitionHint();
-        void vscode.window.showErrorMessage(workspaceInfo.workspaceError || await this.services.translationService.translate('workspace_none'));
-        return;
-      }
-      const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-      if (!workspaceFolder) {
-        return;
-      }
-      if (!workspaceInfo.hasGit) {
-        this.clearDefinitionHint();
-        void vscode.window.showInformationMessage(await this.services.translationService.translate('definition_requires_git'));
-        return;
-      }
-      const settings = this.getSettings();
-      if (!this.services.connectionController.isRemoteSearchConfigured(settings)) {
-        this.clearDefinitionHint();
-        void vscode.window.showInformationMessage(await this.services.translationService.translate('connection_required'));
-        return;
-      }
+    // 系统进度通知：命令一开始就显示，阶段信息随远端执行实时更新。
+    await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: `Ripgrep: ${symbol}` },
+      async (progress) => {
+        progress.report({ message: 'Searching definitions…' });
+        try {
+          const workspaceInfo = await this.getCachedWorkspaceInfo();
+          if (!workspaceInfo.workspaceOk) {
+            void vscode.window.showErrorMessage(workspaceInfo.workspaceError || await this.services.translationService.translate('workspace_none'));
+            return;
+          }
+          const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+          if (!workspaceFolder) {
+            return;
+          }
+          if (!workspaceInfo.hasGit) {
+            void vscode.window.showInformationMessage(await this.services.translationService.translate('definition_requires_git'));
+            return;
+          }
+          const settings = this.getSettings();
+          if (!this.services.connectionController.isRemoteSearchConfigured(settings)) {
+            void vscode.window.showInformationMessage(await this.services.translationService.translate('connection_required'));
+            return;
+          }
 
-      const matches = await this.services.searchCoordinator.lookupDefinitions(
-        symbol,
-        settings,
-        workspaceFolder,
-        workspaceInfo.repositories,
-        (phase) => this.showDefinitionHint(editor, range, phase)
-      );
-      this.clearDefinitionHint();
+          const matches = await this.services.searchCoordinator.lookupDefinitions(
+            symbol,
+            settings,
+            workspaceFolder,
+            workspaceInfo.repositories,
+            (phase) => progress.report({ message: phase })
+          );
 
-      const uniqueMatches = dedupeMatches(matches);
-      if (uniqueMatches.length === 0) {
-        void vscode.window.showInformationMessage(
-          await this.services.translationService.format('goto_def_not_found', { symbol })
-        );
-        return;
-      }
-      if (uniqueMatches.length === 1) {
-        this.enqueueOpenMatch(uniqueMatches[0], true);
-        return;
-      }
+          const uniqueMatches = dedupeMatches(matches);
+          if (uniqueMatches.length === 0) {
+            void vscode.window.showInformationMessage(
+              await this.services.translationService.format('goto_def_not_found', { symbol })
+            );
+            return;
+          }
+          if (uniqueMatches.length === 1) {
+            this.enqueueOpenMatch(uniqueMatches[0], true);
+            return;
+          }
 
-      await this.definitionPicker.show({
-        symbol,
-        matches: uniqueMatches,
-        onSelect: (match) => {
-          this.enqueueOpenMatch(match, true);
+          await this.showDefinitionQuickPick(symbol, uniqueMatches);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          void vscode.window.showErrorMessage(await this.services.translationService.format('goto_def_failed', { message }));
         }
-      });
-    } catch (error) {
-      this.clearDefinitionHint();
-      const message = error instanceof Error ? error.message : String(error);
-      void vscode.window.showErrorMessage(await this.services.translationService.format('goto_def_failed', { message }));
-    }
+      }
+    );
   }
 
   public async openLogFileInEditor(): Promise<void> {
@@ -266,8 +257,6 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
 
   public dispose(): void {
     this.stopKeepalive();
-    this.definitionPicker.disposePanel();
-    this.clearDefinitionHint();
     this.services.session.dispose();
     this.services.connectionController.close('provider disposed');
   }
@@ -402,27 +391,37 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
   }
 
   /**
-   * 编辑器内联提示：在触发符号后紧邻显示阶段文字，替代系统进度通知。
+   * 定义搜索多候选悬浮窗：点击跳转、↑↓ 移动、Enter 跳转、Esc 关闭。
    */
-  private showDefinitionHint(editor: vscode.TextEditor, range: vscode.Range, text: string): void {
-    this.clearDefinitionHint();
-    const decoration = vscode.window.createTextEditorDecorationType({
-      after: {
-        contentText: ` ${text}`,
-        color: '#e8a33d',
-        fontWeight: '600',
-        fontStyle: 'italic'
+  private async showDefinitionQuickPick(symbol: string, matches: SearchMatch[]): Promise<void> {
+    const picker = vscode.window.createQuickPick<vscode.QuickPickItem & { match?: SearchMatch }>();
+    picker.title = `Ripgrep: ${symbol}`;
+    picker.placeholder = await this.services.translationService.translate('goto_def_select');
+    picker.matchOnDescription = true;
+    picker.matchOnDetail = true;
+    picker.items = matches.map((match) => ({
+      label: match.symbolName || symbol,
+      description: `${match.relativePath || match.path}:${match.line}:${match.column}`,
+      detail: match.preview,
+      match
+    }));
+    const close = (): void => picker.dispose();
+    picker.onDidChangeSelection((selected) => {
+      const item = selected[0];
+      if (item?.match) {
+        close();
+        this.enqueueOpenMatch(item.match, true);
       }
     });
-    this.definitionHintDecoration = decoration;
-    editor.setDecorations(decoration, [range]);
-  }
-
-  private clearDefinitionHint(): void {
-    if (this.definitionHintDecoration) {
-      this.definitionHintDecoration.dispose();
-      this.definitionHintDecoration = undefined;
-    }
+    picker.onDidAccept(() => {
+      const item = picker.activeItems[0];
+      if (item?.match) {
+        close();
+        this.enqueueOpenMatch(item.match, true);
+      }
+    });
+    picker.onDidHide(() => close());
+    picker.show();
   }
 
   private async ensureWorkspaceUsable(): Promise<boolean> {

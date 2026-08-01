@@ -55,6 +55,7 @@ def_no_results,No definition matches,无定义匹配
 goto_def_no_symbol,No symbol under the cursor.,光标处没有可识别的符号。
 goto_def_not_found,No definition found for {symbol}.,未找到 {symbol} 的定义。
 goto_def_failed,Definition search failed: {message},定义搜索失败：{message}
+goto_def_select,Select a definition to jump to (↑↓ to move, Enter to jump),选择要跳转的定义（↑↓ 移动，Enter 跳转）
 render_timing,rendered in {elapsedMs} ms,渲染 {elapsedMs} ms
 rebuild_tags_button,Rebuild tags,重建 tags
 rebuild_tags_start,Rebuilding tag index on server…,正在在服务器上重建标签索引…
