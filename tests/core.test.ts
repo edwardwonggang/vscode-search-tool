@@ -609,8 +609,45 @@ test('ctags tag lines parse symbol, path, line, and preview', () => {
 
   assert.equal(parseTagLine('needle\tsrc/main.h\t/^int needle(void);$/;"\tf\tline:3', 'needle', '/tmp'), null);
   assert.equal(parseTagLine('needle\tsrc/main.h\t/^extern int needle(void);$/;"\tf\tline:4', 'needle', '/tmp'), null);
+  assert.equal(parseTagLine('needle\tsrc/main.h\t/^int needle(void);$/;"\tp\tline:3', 'needle', '/tmp'), null);
   assert.equal(parseTagLine('other\tsrc/main.ts\t/^function other()$/;"\tf\tline:1', 'needle', '/tmp'), null);
   assert.equal(parseTagLine('broken line', 'needle', '/tmp'), null);
+
+  assert.deepEqual(parseTagLine('needle\tsrc/defs.h\t/^#define needle 1$/;"\td\tline:5', 'needle', '/tmp'), {
+    name: 'needle',
+    remoteFileAbs: '/tmp/src/defs.h',
+    line: 5,
+    column: 9,
+    endColumn: 15,
+    preview: '#define needle 1',
+    kind: 'd'
+  });
+
+  assert.deepEqual(parseTagLine('needle\tsrc/types.h\t/^struct needle$/;"\ts\tline:12', 'needle', '/tmp'), {
+    name: 'needle',
+    remoteFileAbs: '/tmp/src/types.h',
+    line: 12,
+    column: 8,
+    endColumn: 14,
+    preview: 'struct needle',
+    kind: 's'
+  });
+
+  assert.deepEqual(parseTagLine('needle\tsrc/types.h\t/^typedef int needle;$/;"\tt\tline:20', 'needle', '/tmp'), {
+    name: 'needle',
+    remoteFileAbs: '/tmp/src/types.h',
+    line: 20,
+    column: 13,
+    endColumn: 19,
+    preview: 'typedef int needle;',
+    kind: 't'
+  });
+
+  assert.equal(parseTagLine('needle\tsrc/types.h\t/^enum needle$/;"\tg\tline:2', 'needle', '/tmp')?.kind, 'g');
+  assert.equal(parseTagLine('needle\tsrc/types.h\t/^union needle$/;"\tu\tline:8', 'needle', '/tmp')?.kind, 'u');
+  assert.equal(parseTagLine('needle\tsrc/types.hpp\t/^class needle$/;"\tc\tline:3', 'needle', '/tmp')?.kind, 'c');
+  assert.equal(parseTagLine('needle\tsrc/types.h\t/^  needle = 3,$/;"\te\tline:7', 'needle', '/tmp')?.kind, 'e');
+  assert.equal(parseTagLine('needle\tsrc/defs.h\t/^#define needle(x) x$/;"\tmacro\tline:9', 'needle', '/tmp')?.kind, 'macro');
 });
 
 test('tag index refresh decisions use metadata without rebuilding missing tags in the background', () => {
@@ -683,6 +720,9 @@ test('tag index metadata and rebuild command use tmp file then atomic replace', 
   assert.equal(command.includes("mv -f '/home/alice/repo/tags.tmp' '/home/alice/repo/tags'"), true);
   assert.equal(command.includes("--exclude='tags'"), true);
   assert.equal(command.includes("--exclude='tags.tmp'"), true);
+  assert.equal(command.includes("--exclude='node_modules'"), true);
+  assert.equal(command.includes('--c-kinds=+defgmpstuv'), true);
+  assert.equal(command.includes('--c++-kinds=+cdefgmpstuv'), true);
   assert.equal(command.includes("tags.meta.json"), true);
 });
 

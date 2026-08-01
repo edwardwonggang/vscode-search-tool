@@ -10,7 +10,23 @@ export type ParsedTagLine = {
   kind?: string;
 };
 
-const DEFINITION_KINDS = new Set(['f', 'function', 'm', 'method']);
+// 定义搜索接受的 ctags kind：函数/方法、宏、结构体、类、枚举、枚举成员、typedef、联合体。
+const DEFINITION_KINDS = new Set([
+  'f', 'function',
+  'm', 'method',
+  'd', 'macro',
+  's', 'struct',
+  'c', 'class',
+  'g', 'enum',
+  'e', 'enumerator',
+  't', 'typedef',
+  'u', 'union'
+]);
+
+function isFunctionKind(kind: string | undefined): boolean {
+  const normalized = kind?.toLowerCase();
+  return normalized === 'f' || normalized === 'function' || normalized === 'm' || normalized === 'method';
+}
 
 export function parseTagLine(line: string, query: string, tagsBaseRemote: string): ParsedTagLine | null {
   const parts = line.split('\t');
@@ -36,7 +52,7 @@ export function parseTagLine(line: string, query: string, tagsBaseRemote: string
   const parsedLine = lineNumMatch ? Number.parseInt(lineNumMatch[1] ?? '1', 10) : 1;
   const decodedPreview = decodeExCommandPreview(excmd);
   const preview = decodedPreview.length > 200 ? `${decodedPreview.slice(0, 200)}...` : decodedPreview;
-  if (isLikelyDeclarationPreview(preview)) {
+  if (isFunctionKind(kind) && isLikelyDeclarationPreview(preview)) {
     return null;
   }
   const symbolIndex = preview.indexOf(name);

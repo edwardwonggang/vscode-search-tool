@@ -5,7 +5,7 @@ export const TAGS_FILE_NAME = 'tags';
 export const TAGS_TMP_FILE_NAME = 'tags.tmp';
 export const TAGS_META_FILE_NAME = 'tags.meta.json';
 export const TAG_INDEX_SCHEMA_VERSION = 1;
-export const TAG_INDEX_CTAGS_ARGS_KEY = '--tag-relative=yes --fields=+n --exclude=tags --exclude=tags.tmp --exclude=tags.meta.json';
+export const TAG_INDEX_CTAGS_ARGS_KEY = '--tag-relative=yes --fields=+n --c-kinds=+defgmpstuv --c++-kinds=+cdefgmpstuv --exclude=tags --exclude=tags.tmp --exclude=tags.meta.json';
 export const DEFAULT_TAG_AUTO_REFRESH_MINUTES = 30;
 
 export const CTAGS_EXCLUDE_PATTERNS = [
@@ -31,7 +31,8 @@ export const CTAGS_EXCLUDE_PATTERNS = [
   '*.tar',
   '*.tgz',
   '*.zip',
-  '*.7z'
+  '*.7z',
+  'node_modules'
 ] as const;
 
 export type TagIndexPaths = {
@@ -164,7 +165,7 @@ export function buildCtagsRebuildCommand(ctagsPath: string, gitTop: string, path
   return [
     `cd ${shellEscape(gitTop)}`,
     `rm -f ${shellEscape(paths.tmpPath)}`,
-    `${shellEscape(ctagsPath)} -R -f ${shellEscape(paths.tmpPath)} --tag-relative=yes --fields=+n ${excludes} .`,
+    `${shellEscape(ctagsPath)} -R -f ${shellEscape(paths.tmpPath)} --tag-relative=yes --fields=+n --c-kinds=+defgmpstuv --c++-kinds=+cdefgmpstuv ${excludes} .`,
     `mv -f ${shellEscape(paths.tmpPath)} ${shellEscape(paths.tagsPath)}`,
     `printf %s ${shellEscape(metaJson)} > ${shellEscape(paths.metaPath)}`
   ].join(' && ');
