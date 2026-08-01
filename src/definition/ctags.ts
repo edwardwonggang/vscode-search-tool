@@ -11,6 +11,7 @@ export type ParsedTagLine = {
 };
 
 // 定义搜索接受的 ctags kind：函数/方法、宏、结构体、类、枚举、枚举成员、typedef、联合体。
+// 'x' 表示外部/前置声明（如 `struct foo;`），结构体声明处也属于用户需要的定义搜索范围。
 const DEFINITION_KINDS = new Set([
   'f', 'function',
   'm', 'method',
@@ -20,7 +21,8 @@ const DEFINITION_KINDS = new Set([
   'g', 'enum',
   'e', 'enumerator',
   't', 'typedef',
-  'u', 'union'
+  'u', 'union',
+  'x', 'extern'
 ]);
 
 function isFunctionKind(kind: string | undefined): boolean {

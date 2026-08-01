@@ -648,6 +648,16 @@ test('ctags tag lines parse symbol, path, line, and preview', () => {
   assert.equal(parseTagLine('needle\tsrc/types.hpp\t/^class needle$/;"\tc\tline:3', 'needle', '/tmp')?.kind, 'c');
   assert.equal(parseTagLine('needle\tsrc/types.h\t/^  needle = 3,$/;"\te\tline:7', 'needle', '/tmp')?.kind, 'e');
   assert.equal(parseTagLine('needle\tsrc/defs.h\t/^#define needle(x) x$/;"\tmacro\tline:9', 'needle', '/tmp')?.kind, 'macro');
+
+  assert.deepEqual(parseTagLine('needle\tsrc/types.h\t/^struct needle;$/;"\tx\tline:15', 'needle', '/tmp'), {
+    name: 'needle',
+    remoteFileAbs: '/tmp/src/types.h',
+    line: 15,
+    column: 8,
+    endColumn: 14,
+    preview: 'struct needle;',
+    kind: 'x'
+  });
 });
 
 test('tag index refresh decisions use metadata without rebuilding missing tags in the background', () => {
