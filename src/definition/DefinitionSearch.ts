@@ -1,49 +1,28 @@
 import type { Client } from 'ssh2';
-import * as vscode from 'vscode';
 import * as posixPath from 'path/posix';
 import type { SearchMatch, SearchOptions, SearchSettings } from '../core/types';
 import type { SearchResultStore } from '../search/SearchResultStore';
 import type { TranslationService } from '../i18n/TranslationService';
 import type { RemoteExecutor } from '../remote/RemoteExecutor';
 import type { RemoteToolInstaller } from '../remote/RemoteToolInstaller';
-import type { WorkspaceResolver } from '../workspace/WorkspaceResolver';
+import type { ResolvedSearchRepository, WorkspaceResolver } from '../workspace/WorkspaceResolver';
 import type { SessionLogger } from '../session/SessionLogger';
 import { parseTagLine } from './ctags';
 import { escapeRegExpString } from '../core/glob';
-import { buildRemoteCommand, buildGitTopCommand, buildGitInsideWorkTreeCommand, buildRemoteFileExistsCommand } from '../remote/commands';
+import { buildGitTopCommand, buildGitInsideWorkTreeCommand, buildRemoteFileExistsCommand, buildExecutableVersionCommand } from '../remote/commands';
 import { shellEscape } from '../core/shell';
 import type { SearchSession } from '../session/SearchSession';
 import type { WebviewMessageRouter } from '../search/WebviewMessageRouter';
 import type { ConnectionController } from '../session/ConnectionController';
 import { StreamingLineProcessor } from '../search/StreamingLineProcessor';
 import { filterRipgrepStderr, isIgnorableRipgrepFailure } from '../session/rgDiagnostics';
-
-const TAGS_FILE_NAME = 'tags';
-const CTAGS_EXCLUDE_PATTERNS = [
-  '*.a',
-  '*.bin',
-  '*.bmp',
-  '*.bz2',
-  '*.dll',
-  '*.elf',
-  '*.exe',
-  '*.gif',
-  '*.gz',
-  '*.hex',
-  '*.iso',
-  '*.jpg',
-  '*.jpeg',
-  '*.lib',
-  '*.o',
-  '*.obj',
-  '*.pdf',
-  '*.png',
-  '*.so',
-  '*.tar',
-  '*.tgz',
-  '*.zip',
-  '*.7z'
-] as const;
+import {
+  TAG_INDEX_CTAGS_ARGS_KEY,
+  buildCtagsRebuildCommand,
+  buildGitHeadCommand,
+  createTagIndexMeta,
+  getTagIndexPaths
+} from './TagIndex';
 const CTAGS_PROGRESS_REFRESH_MS = 500;
 
 export type DefinitionSearchConfig = {
@@ -69,12 +48,14 @@ export class DefinitionSearch {
     token: number,
     options: SearchOptions,
     settings: SearchSettings,
-    workspaceFolder: vscode.WorkspaceFolder,
-    remoteCwd: string,
-    messageRouter: WebviewMessageRouter
-  ): Promise<void> {
+    repository: ResolvedSearchRepository,
+    messageRouter: WebviewMessageRouter,
+    finalize = true,
+    searchStartedAt = Date.now()
+  ): Promise<boolean> {
     const query = options.query.trim();
-    const startedAt = Date.now();
+    const startedAt = searchStartedAt;
+    const remoteCwd = repository.remoteCwd;
     this.logger.log(`def-search#${token} start query="${query}" cwd="${remoteCwd}" session.current=${this.session.currentToken}`);
     this.logger.log(`def-search#${token} requestId=${options.requestId ?? 'none'} trigger=${options.triggerSource ?? 'unknown'}`);
     const definitionPathFilter = this.createResultPathFilter(options, settings);
@@ -92,7 +73,7 @@ export class DefinitionSearch {
       const client = await this.connectionController.getOrCreateClient(settings);
       if (!this.session.isCurrent(token)) {
         this.logger.log(`def-search#${token} cancelled after getting client`);
-        return;
+        return false;
       }
       this.logger.log(`def-search#${token} ensuring rg`);
       this.session.postPhase('Checking remote ripgrep...');
@@ -110,19 +91,20 @@ export class DefinitionSearch {
       const gitTop = await this.getRemoteGitTop(client, remoteCwd, token);
       if (!this.session.isCurrent(token) || !gitTop) {
         this.logger.log(`def-search#${token} cancelled or no git top`);
-        return;
+        return false;
       }
       this.logger.log(`def-search#${token} gitTop="${gitTop}"`);
 
-      const tagsPath = posixPath.join(posixPath.dirname(gitTop), TAGS_FILE_NAME);
+      const tagIndexPaths = getTagIndexPaths(gitTop);
+      const tagsPath = tagIndexPaths.tagsPath;
       this.logger.log(`def-search#${token} tagsPath=${tagsPath}`);
       const exists = await this.remoteFileExists(client, tagsPath);
       this.logger.log(`def-search#${token} tags exists=${exists}`);
       if (!exists) {
         this.logger.log(`def-search#${token} running ctags build`);
-        await this.runRemoteCtagsBuild(client, ctagsPath, gitTop, tagsPath, token, messageRouter);
+        await this.runRemoteCtagsBuild(client, ctagsPath, gitTop, token, messageRouter);
         if (!this.session.isCurrent(token)) {
-          return;
+          return false;
         }
       } else {
         this.session.postState({
@@ -149,14 +131,15 @@ export class DefinitionSearch {
             return;
           }
           totalLines += 1;
-          const m = this.parseTagResultLine(line, query, workspaceFolder, remoteCwd, tagsDir);
+          const m = this.parseTagResultLine(line, query, repository, tagsDir);
           if (!m) {
             return;
           }
-          const relativePath = m.relativePath ?? vscode.workspace.asRelativePath(m.path, false);
-          if (!definitionPathFilter(relativePath)) {
+          const filterRelativePath = m.repositoryRelativePath ?? m.relativePath ?? m.path;
+          if (!definitionPathFilter(filterRelativePath)) {
             return;
           }
+          const relativePath = m.relativePath ?? filterRelativePath;
           const cacheKey = m.uri ?? m.path;
           this.resultStore.addMatch(cacheKey, m.path, relativePath, m);
           this.session.recordMatch();
@@ -180,7 +163,7 @@ export class DefinitionSearch {
       this.logger.log(`def-search#${token} stream stats=${JSON.stringify(lineBuffer.stats)}`);
       this.logger.log(`def-search#${token} rg done code=${rg.code} stdoutLines=${totalLines}`);
       if (!this.session.isCurrent(token)) {
-        return;
+        return false;
       }
       const stderr = filterRipgrepStderr(rg.stderr);
       if (stderr.ignoredPermissionDeniedCount > 0) {
@@ -189,6 +172,9 @@ export class DefinitionSearch {
       if (rg.code === 141) {
         this.logger.log(`def-search#${token} ignored ripgrep code=141 after stream close`);
         this.session.flushResults();
+        if (!finalize) {
+          return true;
+        }
         this.session.stopProgress();
         const elapsedMs = Date.now() - startedAt;
         const total = this.resultStore.totalMatches();
@@ -196,7 +182,7 @@ export class DefinitionSearch {
           ? (await this.translationService.translate('def_no_results')) + ` (${elapsedMs} ms)`
           : `${this.resultStore.size} files, ${total} results (${elapsedMs} ms)`;
         this.session.postState({ type: 'state', running: false, summary, elapsedMs, ctagsInProgress: false });
-        return;
+        return true;
       }
       if (isIgnorableRipgrepFailure(rg.code, rg.stderr)) {
         this.logger.log(`def-search#${token} ignored ripgrep code=${rg.code} with permission-denied diagnostics only`);
@@ -205,6 +191,9 @@ export class DefinitionSearch {
       }
 
       this.session.flushResults();
+      if (!finalize) {
+        return true;
+      }
       this.session.stopProgress();
 
       this.logger.log(`def-search#${token} done store size=${this.resultStore.size} total=${this.resultStore.totalMatches()}`);
@@ -215,6 +204,7 @@ export class DefinitionSearch {
         ? (await this.translationService.translate('def_no_results')) + ` (${elapsedMs} ms)`
         : `${fileCount} files, ${total} results (${elapsedMs} ms)`;
       this.session.postState({ type: 'state', running: false, summary, elapsedMs, ctagsInProgress: false });
+      return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.log(`def-search#${token} error: ${message}`);
@@ -222,6 +212,7 @@ export class DefinitionSearch {
         this.session.stopProgress();
         this.session.postState({ type: 'state', running: false, error: message, ctagsInProgress: false });
       }
+      return false;
     }
   }
 
@@ -233,8 +224,7 @@ export class DefinitionSearch {
   private parseTagResultLine(
     line: string,
     query: string,
-    workspaceFolder: vscode.WorkspaceFolder,
-    remoteCwd: string,
+    repository: ResolvedSearchRepository,
     tagsBaseRemote: string
   ): SearchMatch | null {
     this.logger.debug(`parseTagResultLine query="${query}" line="${line.substring(0, 80)}..."`);
@@ -245,7 +235,7 @@ export class DefinitionSearch {
     }
     let target;
     try {
-      target = this.createTargetFromRemotePath(workspaceFolder, parsed.remoteFileAbs, remoteCwd);
+      target = this.createTargetFromRemotePath(repository, parsed.remoteFileAbs);
     } catch (error) {
       this.logger.debug(`parseTagResultLine skipped: ${error instanceof Error ? error.message : String(error)}`);
       return null;
@@ -254,6 +244,7 @@ export class DefinitionSearch {
       path: target.legacyPath,
       uri: target.uriString,
       relativePath: target.relativePath,
+      repositoryRelativePath: target.repositoryRelativePath,
       line: parsed.line,
       column: parsed.column,
       endColumn: parsed.endColumn,
@@ -262,10 +253,10 @@ export class DefinitionSearch {
     };
   }
 
-  private createTargetFromRemotePath(workspaceFolder: vscode.WorkspaceFolder, remoteFileAbs: string, remoteCwd: string) {
-    const relativePath = this.getRelativeRemotePath(remoteFileAbs, remoteCwd);
+  private createTargetFromRemotePath(repository: ResolvedSearchRepository, remoteFileAbs: string) {
+    const relativePath = this.getRelativeRemotePath(remoteFileAbs, repository.remoteCwd);
     if (relativePath !== undefined) {
-      return this.workspaceResolver.createWorkspaceTarget(workspaceFolder, relativePath);
+      return this.workspaceResolver.createWorkspaceTarget(repository, relativePath);
     }
     throw new Error('Remote path is outside the workspace root.');
   }
@@ -311,7 +302,6 @@ export class DefinitionSearch {
     client: Client,
     ctagsPath: string,
     gitTop: string,
-    tagsPath: string,
     token: number,
     messageRouter: WebviewMessageRouter
   ): Promise<void> {
@@ -320,8 +310,20 @@ export class DefinitionSearch {
     const buildDoneMessage = await this.translationService.translate('ctags_build_done');
 
     this.session.postState({ type: 'state', running: true, summary: buildSummary, ctagsInProgress: true });
-    const excludes = CTAGS_EXCLUDE_PATTERNS.map((pattern) => `--exclude=${shellEscape(pattern)}`).join(' ');
-    const command = `cd ${shellEscape(gitTop)} && ${shellEscape(ctagsPath)} -R -f ${shellEscape(tagsPath)} --tag-relative=yes --fields=+n ${excludes} .`;
+    const tagIndexPaths = getTagIndexPaths(gitTop);
+    const gitHead = await this.getGitHead(client, gitTop);
+    const ctagsVersion = await this.getCtagsVersion(client, ctagsPath);
+    const command = buildCtagsRebuildCommand(
+      ctagsPath,
+      gitTop,
+      tagIndexPaths,
+      createTagIndexMeta({
+        gitTop,
+        gitHead,
+        ctagsVersion,
+        ctagsArgsKey: TAG_INDEX_CTAGS_ARGS_KEY
+      })
+    );
 
     return new Promise((resolve, reject) => {
       client.exec(command, (error, stream) => {
@@ -384,5 +386,15 @@ export class DefinitionSearch {
         });
       });
     });
+  }
+
+  private async getGitHead(client: Client, gitTop: string): Promise<string> {
+    const result = await this.remoteExecutor.execWithExitCode(client, buildGitHeadCommand(gitTop));
+    return result.stdout.split(/\r?\n/u)[0]?.trim() ?? '';
+  }
+
+  private async getCtagsVersion(client: Client, ctagsPath: string): Promise<string> {
+    const result = await this.remoteExecutor.execWithExitCode(client, buildExecutableVersionCommand(ctagsPath));
+    return result.stdout.split(/\r?\n/u)[0]?.trim() ?? '';
   }
 }

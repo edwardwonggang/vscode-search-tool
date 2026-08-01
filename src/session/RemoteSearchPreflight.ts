@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import type { SearchSettings } from '../core/types';
-import type { WorkspaceResolver } from '../workspace/WorkspaceResolver';
+import type { ResolvedSearchRepository, SearchRepository, WorkspaceResolver } from '../workspace/WorkspaceResolver';
 import type { TranslationService } from '../i18n/TranslationService';
 import type { WebviewMessageRouter } from '../search/WebviewMessageRouter';
 import type { RemoteGitRootGuard } from './RemoteGitRootGuard';
@@ -21,24 +21,33 @@ export class RemoteSearchPreflight {
   public async prepare(
     settings: SearchSettings,
     workspaceFolder: vscode.WorkspaceFolder,
+    repositories: SearchRepository[],
     token: number,
     messageRouter: WebviewMessageRouter
-  ): Promise<string> {
-    this.session?.postPhase('Resolving remote search path...');
-    const remoteCwd = await this.workspaceResolver.resolveRemoteCwd(
+  ): Promise<ResolvedSearchRepository[]> {
+    this.session?.postPhase('Resolving remote search paths...');
+    const resolvedRepositories = await this.workspaceResolver.resolveSearchRepositories(
       settings,
       workspaceFolder,
+      repositories,
       await this.translationService.translate('err_remote_search_path_required')
     );
     if (!this.session?.isCurrent(token)) {
-      return remoteCwd;
+      return resolvedRepositories;
     }
-    this.session?.postPhase(`Checking remote Git root: ${remoteCwd}`);
-    await this.remoteGitRootGuard.ensureGitRoot(settings, remoteCwd, token);
-    if (!this.session?.isCurrent(token)) {
-      return remoteCwd;
+
+    for (const repository of resolvedRepositories) {
+      this.session?.postPhase(`Checking remote Git root: ${repository.remoteCwd}`);
+      await this.remoteGitRootGuard.ensureGitRoot(settings, repository.remoteCwd, token);
+      if (!this.session?.isCurrent(token)) {
+        return resolvedRepositories;
+      }
     }
-    messageRouter.postConnectionResult({ ok: true, message: `Current SSH path: ${remoteCwd}`, cwd: remoteCwd });
-    return remoteCwd;
+
+    const message = resolvedRepositories.length === 1
+      ? `Current SSH path: ${resolvedRepositories[0].remoteCwd}`
+      : `Search repositories: ${resolvedRepositories.length}`;
+    messageRouter.postConnectionResult({ ok: true, message, cwd: resolvedRepositories.map((repository) => repository.remoteCwd).join('\n') });
+    return resolvedRepositories;
   }
 }

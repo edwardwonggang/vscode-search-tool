@@ -31,10 +31,11 @@ export function addContentSearchMatch(input: AddContentMatchOptions): number {
   }
 
   const target = input.createTarget(filePath);
-  const relativePath = target.relativePath;
-  if (!input.resultPathFilter(relativePath)) {
+  const filterRelativePath = target.repositoryRelativePath || target.relativePath;
+  if (!input.resultPathFilter(filterRelativePath)) {
     return 0;
   }
+  const relativePath = target.relativePath;
 
   const submatches = data.submatches ?? [];
   const lines = data.lines?.text ?? '';

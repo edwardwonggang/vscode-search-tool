@@ -7,7 +7,10 @@ export type ParsedTagLine = {
   column: number;
   endColumn: number;
   preview: string;
+  kind?: string;
 };
+
+const DEFINITION_KINDS = new Set(['f', 'function', 'm', 'method']);
 
 export function parseTagLine(line: string, query: string, tagsBaseRemote: string): ParsedTagLine | null {
   const parts = line.split('\t');
@@ -23,11 +26,19 @@ export function parseTagLine(line: string, query: string, tagsBaseRemote: string
     return null;
   }
   const excmd = stripTagTerminator(parts[2] ?? '');
-  const fields = parts.slice(3).join('\t');
+  const tagFields = parts.slice(3);
+  const fields = tagFields.join('\t');
+  const kind = parseTagKind(tagFields);
+  if (!isDefinitionKind(kind)) {
+    return null;
+  }
   const lineNumMatch = /(?:^|\t)line:(\d+)(?:\t|$)/u.exec(fields);
   const parsedLine = lineNumMatch ? Number.parseInt(lineNumMatch[1] ?? '1', 10) : 1;
   const decodedPreview = decodeExCommandPreview(excmd);
   const preview = decodedPreview.length > 200 ? `${decodedPreview.slice(0, 200)}...` : decodedPreview;
+  if (isLikelyDeclarationPreview(preview)) {
+    return null;
+  }
   const symbolIndex = preview.indexOf(name);
   const column = symbolIndex >= 0 ? symbolIndex + 1 : 1;
 
@@ -37,8 +48,46 @@ export function parseTagLine(line: string, query: string, tagsBaseRemote: string
     line: parsedLine,
     column,
     endColumn: column + Math.max(name.length, 1),
-    preview
+    preview,
+    kind
   };
+}
+
+export function parseTagKind(fields: string[]): string | undefined {
+  for (const field of fields) {
+    const trimmed = field.trim();
+    if (!trimmed) {
+      continue;
+    }
+    if (trimmed.startsWith('kind:')) {
+      return trimmed.slice('kind:'.length).trim().toLowerCase();
+    }
+    if (!trimmed.includes(':')) {
+      return trimmed.toLowerCase();
+    }
+  }
+  return undefined;
+}
+
+export function isDefinitionKind(kind: string | undefined): boolean {
+  return kind !== undefined && DEFINITION_KINDS.has(kind.toLowerCase());
+}
+
+export function isLikelyDeclarationPreview(preview: string): boolean {
+  const trimmed = preview.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (/[{=]/u.test(trimmed)) {
+    return false;
+  }
+  if (/;\s*$/u.test(trimmed)) {
+    return true;
+  }
+  if (/^(?:extern|typedef)\b/u.test(trimmed)) {
+    return true;
+  }
+  return false;
 }
 
 function stripTagTerminator(value: string): string {

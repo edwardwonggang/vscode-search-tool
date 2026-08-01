@@ -15,7 +15,12 @@ export class ContentSearchProcessor {
   public static processLine(
     entry: ContentSearchEntry,
     resultPathFilter: (relativePath: string) => boolean,
-    createTarget: (remoteRelativePath: string) => { uriString: string; legacyPath: string; relativePath: string },
+    createTarget: (remoteRelativePath: string) => {
+      uriString: string;
+      legacyPath: string;
+      relativePath: string;
+      repositoryRelativePath?: string;
+    },
     resultStore: SearchResultStore
   ): number {
     if (entry.type !== 'match') {
@@ -29,10 +34,11 @@ export class ContentSearchProcessor {
     }
 
     const target = createTarget(filePath);
-    const relativePath = target.relativePath;
-    if (!resultPathFilter(relativePath)) {
+    const filterRelativePath = target.repositoryRelativePath ?? target.relativePath;
+    if (!resultPathFilter(filterRelativePath)) {
       return 0;
     }
+    const relativePath = target.relativePath;
 
     const submatches = data.submatches ?? [];
     const lines = data.lines?.text ?? '';

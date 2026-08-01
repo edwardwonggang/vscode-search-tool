@@ -8,6 +8,7 @@
   "include": [
     "src/core/**/*.ts",
     "src/remote/**/*.ts",
+    "src/workspace/**/*.ts",
     "tests/**/*.ts"
   ]
 }

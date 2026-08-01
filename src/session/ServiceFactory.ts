@@ -11,6 +11,7 @@ import { WebviewMessageRouter } from '../search/WebviewMessageRouter';
 import { SearchSession } from './SearchSession';
 import { ConnectionController } from './ConnectionController';
 import { SearchCoordinator } from './SearchCoordinator';
+import { TagIndexAutoRefresh } from '../definition/TagIndexAutoRefresh';
 
 const DEFAULT_REMOTE_RG_PATH = '/tmp/ripgreptool-rg';
 const DEFAULT_REMOTE_CTAGS_PATH = '/tmp/ripgreptool-ctags';
@@ -26,6 +27,7 @@ export type Services = {
   session: SearchSession;
   connectionController: ConnectionController;
   searchCoordinator: SearchCoordinator;
+  tagIndexAutoRefresh: TagIndexAutoRefresh;
 };
 
 export function createServices(context: ExtensionContext): Services {
@@ -94,6 +96,15 @@ export function createServices(context: ExtensionContext): Services {
     }
   );
 
+  const tagIndexAutoRefresh = new TagIndexAutoRefresh(
+    connectionController,
+    workspaceResolver,
+    translationService,
+    remoteExecutor,
+    remoteToolInstaller,
+    logger
+  );
+
   return {
     logger,
     translationService,
@@ -102,6 +113,7 @@ export function createServices(context: ExtensionContext): Services {
     messageRouter,
     session,
     connectionController,
-    searchCoordinator
+    searchCoordinator,
+    tagIndexAutoRefresh
   };
 }

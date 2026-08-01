@@ -1,4 +1,4 @@
-import { splitUserGlobs } from '../core/glob';
+import { normalizeExcludeGlobForSearch, splitUserGlobs } from '../core/glob';
 import type { SearchOptions, SearchSettings } from '../core/types';
 
 export type ContentSearchArgOptions = {
@@ -11,7 +11,7 @@ export function buildContentSearchArgs(
   settings: SearchSettings,
   argOptions: ContentSearchArgOptions
 ): string[] {
-  const args = ['--json', '--line-buffered', '--line-number', '--column', '--hidden'];
+  const args = ['--json', '--line-buffered', '--line-number', '--column', '--hidden', '--no-ignore-vcs'];
 
   if (argOptions.threads > 0) {
     args.push('--threads', String(argOptions.threads));
@@ -37,7 +37,7 @@ export function buildContentSearchArgs(
 }
 
 export function buildFileSearchArgs(options: SearchOptions, settings: SearchSettings): string[] {
-  const args = ['--files', '--line-buffered', '--hidden'];
+  const args = ['--files', '--line-buffered', '--hidden', '--no-ignore-vcs'];
   appendSettingsGlobs(args, settings);
   appendUserIncludeGlobs(args, options.include);
   appendUserExcludeGlobs(args, options.exclude);
@@ -49,7 +49,7 @@ function appendSettingsGlobs(args: string[], settings: SearchSettings): void {
     args.push('--glob', glob);
   }
   for (const glob of settings.excludeGlobs) {
-    args.push('--glob', `!${glob}`);
+    appendExcludeGlob(args, glob);
   }
 }
 
@@ -67,6 +67,13 @@ function appendUserExcludeGlobs(args: string[], exclude: string): void {
     return;
   }
   for (const glob of splitUserGlobs(exclude)) {
-    args.push('--glob', `!${glob}`);
+    appendExcludeGlob(args, glob);
+  }
+}
+
+function appendExcludeGlob(args: string[], glob: string): void {
+  const normalized = normalizeExcludeGlobForSearch(glob);
+  if (normalized) {
+    args.push('--glob', `!${normalized}`);
   }
 }

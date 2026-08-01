@@ -3,7 +3,7 @@ import type { SearchOptions, SearchSettings } from '../core/types';
 import type { SearchResultStore } from '../search/SearchResultStore';
 import type { RemoteExecutor } from '../remote/RemoteExecutor';
 import type { RemoteToolInstaller } from '../remote/RemoteToolInstaller';
-import type { WorkspaceResolver } from '../workspace/WorkspaceResolver';
+import type { ResolvedSearchRepository, WorkspaceResolver } from '../workspace/WorkspaceResolver';
 import type { SessionLogger } from './SessionLogger';
 import { addFileSearchResult } from '../search/FileSearchService';
 import { buildFileSearchArgs } from './rgArgs';
@@ -36,20 +36,23 @@ export class FileSearchRunner {
     fileQuery: string,
     options: SearchOptions,
     settings: SearchSettings,
-    workspaceFolder: vscode.WorkspaceFolder,
-    remoteCwd: string,
-    messageRouter: WebviewMessageRouter
-  ): Promise<void> {
-    const startedAt = Date.now();
+    repository: ResolvedSearchRepository,
+    messageRouter: WebviewMessageRouter,
+    finalize = true,
+    searchStartedAt = Date.now()
+  ): Promise<boolean> {
+    const startedAt = searchStartedAt;
+    const remoteCwd = repository.remoteCwd;
     this.logger.log(`file-search#${token} start`);
     this.logger.log(`file-search#${token} query="${fileQuery}"`);
     this.logger.log(`file-search#${token} requestId=${options.requestId ?? 'none'} trigger=${options.triggerSource ?? 'unknown'}`);
+    this.logger.log(`file-search#${token} repository="${repository.workspaceRelativePath || '.'}" remote cwd="${remoteCwd}"`);
     this.session.postPhase('Connecting to SSH...');
 
     try {
       const client = await this.connectionController.getOrCreateClient(settings);
       if (!this.session.isCurrent(token)) {
-        return;
+        return false;
       }
       this.session.postPhase('Checking remote ripgrep...');
       await this.remoteToolInstaller.ensureRg(client);
@@ -78,7 +81,7 @@ export class FileSearchRunner {
           if (!relativePath || !resultPathFilter(relativePath) || !matcher(relativePath)) {
             return;
           }
-          const target = this.createTarget(workspaceFolder, relativePath);
+          const target = this.createTarget(repository, relativePath);
           addFileSearchResult(this.resultStore, target);
           this.session.recordMatch();
           if (!firstResultLogged) {
@@ -101,7 +104,7 @@ export class FileSearchRunner {
       await lineBuffer.flush();
       this.logger.log(`file-search#${token} stream stats=${JSON.stringify(lineBuffer.stats)}`);
       if (!this.session.isCurrent(token)) {
-        return;
+        return false;
       }
 
       const stderr = filterRipgrepStderr(result.stderr);
@@ -112,10 +115,13 @@ export class FileSearchRunner {
       if (result.code === 141) {
         this.logger.log(`file-search#${token} ignored ripgrep code=141 after stream close`);
         this.session.flushResults();
+        if (!finalize) {
+          return true;
+        }
         this.session.stopProgress();
         const elapsedMs = Date.now() - startedAt;
         this.session.postState({ type: 'state', running: false, summary: this.buildSummary(elapsedMs), elapsedMs });
-        return;
+        return true;
       }
 
       if (isIgnorableRipgrepFailure(result.code, result.stderr)) {
@@ -128,14 +134,18 @@ export class FileSearchRunner {
           running: false,
           error: stderr.visibleStderr || `ripgrep exited with code ${result.code}.`
         });
-        return;
+        return false;
       }
 
       this.session.flushResults();
+      if (!finalize) {
+        return true;
+      }
       this.session.stopProgress();
       const elapsedMs = Date.now() - startedAt;
       const summary = this.buildSummary(elapsedMs);
       this.session.postState({ type: 'state', running: false, summary, elapsedMs });
+      return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.log(`file-search#${token} exception: ${message}`);
@@ -143,11 +153,12 @@ export class FileSearchRunner {
         this.session.stopProgress();
         this.session.postState({ type: 'state', running: false, error: message });
       }
+      return false;
     }
   }
 
-  private createTarget(workspaceFolder: vscode.WorkspaceFolder, remoteRelativePath: string) {
-    return this.workspaceResolver.createWorkspaceTarget(workspaceFolder, remoteRelativePath);
+  private createTarget(repository: ResolvedSearchRepository, remoteRelativePath: string) {
+    return this.workspaceResolver.createWorkspaceTarget(repository, remoteRelativePath);
   }
 
   private buildSummary(elapsedMs: number): string {

@@ -10,7 +10,7 @@ export type RemoteGitRootGuardSession = {
 };
 
 export class RemoteGitRootGuard {
-  private verifiedKey?: string;
+  private readonly verifiedKeys = new Set<string>();
 
   constructor(
     private readonly connectionController: ConnectionController,
@@ -20,12 +20,12 @@ export class RemoteGitRootGuard {
   ) {}
 
   public clear(): void {
-    this.verifiedKey = undefined;
+    this.verifiedKeys.clear();
   }
 
   public async ensureGitRoot(settings: SearchSettings, remoteCwd: string, token: number): Promise<void> {
     const key = createRemoteGitRootKey(settings, remoteCwd);
-    if (this.verifiedKey === key) {
+    if (this.verifiedKeys.has(key)) {
       return;
     }
 
@@ -44,7 +44,7 @@ export class RemoteGitRootGuard {
       throw new Error(await this.translationService.translate('git_root_required'));
     }
 
-    this.verifiedKey = key;
+    this.verifiedKeys.add(key);
   }
 }
 

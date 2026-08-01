@@ -4,7 +4,7 @@ import type { SearchOptions, SearchSettings } from '../core/types';
 import type { SearchResultStore } from '../search/SearchResultStore';
 import type { RemoteExecutor } from '../remote/RemoteExecutor';
 import type { RemoteToolInstaller } from '../remote/RemoteToolInstaller';
-import type { WorkspaceResolver } from '../workspace/WorkspaceResolver';
+import type { ResolvedSearchRepository, WorkspaceResolver } from '../workspace/WorkspaceResolver';
 import type { SessionLogger } from './SessionLogger';
 import { ContentSearchProcessor } from './ContentSearchProcessor';
 import { buildContentSearchArgs } from './rgArgs';
@@ -38,12 +38,14 @@ export class ContentSearchRunner {
     token: number,
     options: SearchOptions,
     settings: SearchSettings,
-    workspaceFolder: vscode.WorkspaceFolder,
-    remoteCwd: string,
-    messageRouter: WebviewMessageRouter
-  ): Promise<void> {
-    const startedAt = Date.now();
+    repository: ResolvedSearchRepository,
+    messageRouter: WebviewMessageRouter,
+    finalize = true,
+    searchStartedAt = Date.now()
+  ): Promise<boolean> {
+    const startedAt = searchStartedAt;
     let totalMatches = 0;
+    const remoteCwd = repository.remoteCwd;
     const args = buildContentSearchArgs(options, settings, {
       contextLines: this.config.contextLines,
       threads: this.config.threads
@@ -53,13 +55,13 @@ export class ContentSearchRunner {
     this.logger.log(`search#${token} start`);
     this.logger.log(`search#${token} mode=remote query="${options.query.trim()}"`);
     this.logger.log(`search#${token} requestId=${options.requestId ?? 'none'} trigger=${options.triggerSource ?? 'unknown'}`);
-    this.logger.log(`search#${token} remote cwd="${remoteCwd}"`);
+    this.logger.log(`search#${token} repository="${repository.workspaceRelativePath || '.'}" remote cwd="${remoteCwd}"`);
     this.session.postPhase('Connecting to SSH...');
 
     try {
       const client = await this.connectionController.getOrCreateClient(settings);
       if (!this.session.isCurrent(token)) {
-        return;
+        return false;
       }
       this.session.postPhase('Checking remote ripgrep...');
       await this.remoteToolInstaller.ensureRg(client);
@@ -88,7 +90,7 @@ export class ContentSearchRunner {
           const addedMatches = ContentSearchProcessor.processLine(
             entry,
             resultPathFilter,
-            (remoteRelativePath) => this.createTarget(workspaceFolder, remoteRelativePath),
+            (remoteRelativePath) => this.createTarget(repository, remoteRelativePath),
             this.resultStore
           );
           if (addedMatches > 0) {
@@ -115,7 +117,7 @@ export class ContentSearchRunner {
       await lineBuffer.flush();
       this.logger.log(`search#${token} stream lines=${parsedLines} parseErrors=${parseErrors} stats=${JSON.stringify(lineBuffer.stats)}`);
       if (!this.session.isCurrent(token)) {
-        return;
+        return false;
       }
 
       const stderr = filterRipgrepStderr(result.stderr);
@@ -126,14 +128,17 @@ export class ContentSearchRunner {
       if (result.code === 141) {
         this.logger.log(`search#${token} ignored ripgrep code=141 after stream close`);
         this.session.flushResults();
+        if (!finalize) {
+          return true;
+        }
         this.session.stopProgress();
         this.session.postState({
           type: 'state',
           running: false,
-          summary: this.buildSummary(Date.now() - startedAt, totalMatches),
+          summary: this.buildSummary(Date.now() - startedAt, this.resultStore.totalMatches()),
           elapsedMs: Date.now() - startedAt
         });
-        return;
+        return true;
       }
 
       if (isIgnorableRipgrepFailure(result.code, result.stderr)) {
@@ -146,15 +151,19 @@ export class ContentSearchRunner {
           running: false,
           error: stderr.visibleStderr || `ripgrep exited with code ${result.code}.`
         });
-        return;
+        return false;
       }
 
       this.session.flushResults();
+      if (!finalize) {
+        return true;
+      }
       this.session.stopProgress();
 
       const elapsedMs = Date.now() - startedAt;
-      const summary = this.buildSummary(elapsedMs, totalMatches);
+      const summary = this.buildSummary(elapsedMs, this.resultStore.totalMatches());
       this.session.postState({ type: 'state', running: false, summary, elapsedMs });
+      return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.log(`search#${token} exception: ${message}`);
@@ -162,11 +171,12 @@ export class ContentSearchRunner {
         this.session.stopProgress();
         this.session.postState({ type: 'state', running: false, error: message });
       }
+      return false;
     }
   }
 
-  private createTarget(workspaceFolder: vscode.WorkspaceFolder, remoteRelativePath: string) {
-    return this.workspaceResolver.createWorkspaceTarget(workspaceFolder, remoteRelativePath);
+  private createTarget(repository: ResolvedSearchRepository, remoteRelativePath: string) {
+    return this.workspaceResolver.createWorkspaceTarget(repository, remoteRelativePath);
   }
 
   private buildSummary(elapsedMs: number, totalMatches: number): string {

@@ -12,6 +12,11 @@ export type BootstrapPayload = {
   workspacePath: string;
   gitRootOk: boolean;
   gitError?: string;
+  repositories?: Array<{
+    name: string;
+    relativePath: string;
+    displayPath: string;
+  }>;
   settings: unknown;
   translations: Record<string, string>;
   state: StatePayload;

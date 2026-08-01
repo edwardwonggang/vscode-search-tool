@@ -11,6 +11,7 @@ DESIGN.md
 .specstory/**
 .tmp-icons/**
 .tmp-context/**
+error.txt
 tests/**
 out-test/**
 assets/bin/ripgrep-linux.tar.gz

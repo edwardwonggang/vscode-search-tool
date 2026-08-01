@@ -2,9 +2,13 @@
   "name": "ripgreptool",
   "displayName": "Ripgrep Tool",
   "description": "Remote ripgrep search in the sidebar. Limits and setup are in the README (extension details), not in the in-editor UI.",
-  "version": "0.0.63",
+  "version": "0.0.70",
   "publisher": "local",
   "license": "UNLICENSED",
+  "extensionKind": [
+    "workspace",
+    "ui"
+  ],
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -90,6 +94,8 @@
     "context:changed": "C:\\Users\\10297441.WIN-9DOP5T7GHM7\\.codex\\tools\\context-pack\\context-pack.cmd --changed",
     "test": "tsc -p tsconfig.test.json && node --test out-test/tests/core.test.js",
     "update": "node scripts/update-extension.mjs",
+    "git:register": "node scripts/local-git-register.mjs",
+    "git:web": "node scripts/local-git-web.mjs",
     "watch": "tsc -w -p ./"
   },
   "devDependencies": {

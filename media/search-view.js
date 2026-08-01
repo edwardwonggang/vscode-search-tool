@@ -61,6 +61,7 @@
   let gitRootOk = true;
   let gitRootMessage = '';
   let workspacePath = '';
+  let repositories = [];
   let currentRemotePath = '';
   let lastSearchSummaryText = '';
   let lastRenderTimingInfo = null;
@@ -123,6 +124,7 @@
   if (typeof vscodeState.summaryText === 'string') summaryTextEl.textContent = vscodeState.summaryText;
   if (typeof vscodeState.workspaceName === 'string') workspaceNameEl.textContent = vscodeState.workspaceName;
   if (typeof vscodeState.workspacePath === 'string') workspacePath = vscodeState.workspacePath;
+  if (Array.isArray(vscodeState.repositories)) repositories = vscodeState.repositories;
   if (typeof vscodeState.currentRemotePath === 'string') currentRemotePath = vscodeState.currentRemotePath;
   void iconRegistry.initialize();
   syncDefinitionRootClass();
@@ -180,16 +182,37 @@
 
   function inferCurrentRemotePathFromInputs() {
     const configured = remoteSearchPathInputEl.value.trim();
+    if (repositories.length > 0) {
+      return currentRemotePath || formatRepositoryPaths(configured || workspacePath || '');
+    }
     if (configured) return configured;
     if (currentRemotePath) return currentRemotePath;
     return workspacePath || '';
   }
 
   function syncCurrentRemotePathDisplay(value) {
-    currentRemotePath = value || inferCurrentRemotePathFromInputs();
+    if (typeof value === 'string') {
+      currentRemotePath = value;
+    } else {
+      currentRemotePath = currentRemotePath || '';
+    }
+    const displayPath = repositories.length > 0 && currentRemotePath
+      ? currentRemotePath
+      : inferCurrentRemotePathFromInputs();
     if (!currentRemotePathValueEl) return;
-    currentRemotePathValueEl.textContent = currentRemotePath || '-';
-    currentRemotePathValueEl.title = currentRemotePath || '';
+    currentRemotePathValueEl.textContent = displayPath || '-';
+    currentRemotePathValueEl.title = displayPath || '';
+  }
+
+  function formatRepositoryPaths(basePath) {
+    const base = (basePath || '').replace(/\/$/u, '');
+    return repositories.map((repository) => {
+      const relativePath = repository.relativePath || '';
+      if (base) {
+        return relativePath ? `${base}/${relativePath}` : base;
+      }
+      return repository.displayPath || relativePath || repository.name || '';
+    }).join('\n');
   }
 
   function isCurrentSearchMessage(payload) {
@@ -618,6 +641,7 @@
       summaryText: summaryTextEl.textContent || '',
       workspaceName: workspaceNameEl.textContent || '',
       workspacePath,
+      repositories,
       currentRemotePath,
       activeSearchRequestId,
       nextSearchRequestId
@@ -815,6 +839,7 @@
     if (message.type === 'bootstrap') {
       translations = message.payload.translations || {};
       currentSettings = message.payload.settings || currentSettings;
+      repositories = Array.isArray(message.payload.repositories) ? message.payload.repositories : [];
       applyTranslations();
       updateWorkspacePathDisplay(message.payload.workspacePath || message.payload.workspaceName || '');
       syncDefinitionRootClass();
@@ -885,7 +910,8 @@
     if (message.type === 'connectionResult') {
       settingsPanel.setConnectionStatus(message.payload.message || '');
       if (message.payload.cwd) {
-        syncCurrentRemotePathDisplay(message.payload.cwd);
+        currentRemotePath = message.payload.cwd;
+        syncCurrentRemotePathDisplay();
       }
       persistState();
       if (message.payload.ok) {

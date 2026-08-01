@@ -8,6 +8,7 @@ import {
   createFileQueryMatcher,
   createResultPathFilter,
   matchSearchGlob,
+  normalizeExcludeGlobForSearch,
   normalizeSearchPath,
   splitUserGlobs
 } from '../src/core/glob';
@@ -39,6 +40,14 @@ import {
 import { getRemoteConnectionSignature } from '../src/remote/SshClientManager';
 import { RemoteToolInstaller } from '../src/remote/RemoteToolInstaller';
 import { parseTagLine } from '../src/definition/ctags';
+import {
+  TAG_INDEX_CTAGS_ARGS_KEY,
+  buildCtagsRebuildCommand,
+  createTagIndexMeta,
+  decideTagIndexRefresh,
+  getTagIndexPaths,
+  parseTagIndexMeta
+} from '../src/definition/TagIndex';
 import { addContentSearchMatch } from '../src/search/ContentSearchResults';
 import { populateFileSearchResults } from '../src/search/FileSearchService';
 import { JsonLineBuffer } from '../src/search/JsonLineBuffer';
@@ -52,6 +61,7 @@ import { createRemoteGitRootKey } from '../src/session/RemoteGitRootGuard';
 import { planSearchRequest } from '../src/session/SearchRequestPlan';
 import { SearchResultStore } from '../src/search/SearchResultStore';
 import { StreamingLineProcessor } from '../src/search/StreamingLineProcessor';
+import { discoverGitRepositories, isDirectoryFileType, isGitFileMarkerText, type GitDiscoveryFs } from '../src/workspace/gitDiscovery';
 import { joinFileWorkspaceFsPath, joinRemoteWorkspacePath } from '../src/workspace/uriPaths';
 
 function baseOptions(overrides: Partial<SearchOptions> = {}): SearchOptions {
@@ -76,6 +86,32 @@ function baseSettings(overrides: Partial<SearchSettings> = {}): SearchSettings {
     includeGlobs: [],
     excludeGlobs: [],
     ...overrides
+  };
+}
+
+function createMemoryGitDiscoveryFs(paths: string[]): GitDiscoveryFs {
+  const normalizedPaths = new Set(paths.map((entry) => normalizeSearchPath(entry)));
+  return {
+    async isGitRepository(relativePath) {
+      const pathValue = normalizeSearchPath(relativePath);
+      return normalizedPaths.has(pathValue ? `${pathValue}/.git` : '.git');
+    },
+    async readDirectory(relativePath) {
+      const basePath = normalizeSearchPath(relativePath);
+      const prefix = basePath ? `${basePath}/` : '';
+      const names = new Set<string>();
+      for (const pathValue of normalizedPaths) {
+        if (!pathValue.startsWith(prefix)) {
+          continue;
+        }
+        const remainder = pathValue.slice(prefix.length);
+        const [name] = remainder.split('/');
+        if (name) {
+          names.add(name);
+        }
+      }
+      return Array.from(names).map((name) => ({ name, isDirectory: true }));
+    }
   };
 }
 
@@ -124,7 +160,26 @@ test('search paths and globs match existing include and exclude behavior', () =>
   assert.equal(defaultFilter('lib/source.c'), true);
   assert.equal(defaultFilter('scripts/Makefile'), true);
   assert.equal(defaultFilter('tools/run'), true);
+  assert.equal(defaultFilter('web/index.html'), true);
+  assert.equal(defaultFilter('docs/readme.txt'), true);
   assert.equal(defaultFilter('node_modules/pkg/source.c'), true);
+});
+
+test('exclude directory globs are root-relative unless explicitly recursive', () => {
+  assert.equal(normalizeExcludeGlobForSearch('power/'), 'power/**');
+  assert.equal(normalizeExcludeGlobForSearch('**/power/**'), '**/power/**');
+  assert.equal(normalizeExcludeGlobForSearch('**/*.zip'), '**/*.zip');
+
+  const filter = createResultPathFilter(
+    baseOptions({ exclude: 'power/,**/cache/**' }),
+    baseSettings({ includeGlobs: [], excludeGlobs: ['fw/'] })
+  );
+
+  assert.equal(filter('power/main.c'), false);
+  assert.equal(filter('src/power/main.c'), true);
+  assert.equal(filter('fw/main.c'), false);
+  assert.equal(filter('src/fw/main.c'), true);
+  assert.equal(filter('src/cache/main.c'), false);
 });
 
 test('settings migration removes source-bearing directory excludes', () => {
@@ -158,6 +213,59 @@ test('remote and local path helpers preserve boundary rules', () => {
   assert.equal(getRelativeRemotePath('/home/alice/repo2/src/a.ts', '/home/alice/repo'), undefined);
   assert.equal(isPosixAbsolutePath('\\home\\alice'), true);
   assert.equal(normalizeLocalPath('D:\\Repo\\Src\\'), 'd:/repo/src');
+});
+
+test('git repository discovery scans up to three levels and stops below discovered roots', async () => {
+  const repositories = await discoverGitRepositories(createMemoryGitDiscoveryFs([
+    'B/.git',
+    'B/nested/ignored/.git',
+    'group/C/.git',
+    'one/two/three/.git',
+    'one/two/three/four/.git'
+  ]));
+
+  assert.deepEqual(repositories.map((repository) => repository.workspaceRelativePath), [
+    'B',
+    'group/C',
+    'one/two/three'
+  ]);
+});
+
+test('git repository discovery ignores invalid parent markers and continues to child repositories', async () => {
+  const repositories = await discoverGitRepositories({
+    async isGitRepository(relativePath) {
+      return ['components/mcs_components', 'mcs_dev/mcs'].includes(normalizeSearchPath(relativePath));
+    },
+    async readDirectory(relativePath) {
+      const entries: Record<string, string[]> = {
+        '': ['components', 'mcs_dev'],
+        components: ['mcs_components'],
+        mcs_dev: ['mcs']
+      };
+      return (entries[normalizeSearchPath(relativePath)] ?? []).map((name) => ({ name, isDirectory: true }));
+    }
+  });
+
+  assert.deepEqual(repositories.map((repository) => repository.workspaceRelativePath), [
+    'components/mcs_components',
+    'mcs_dev/mcs'
+  ]);
+});
+
+test('directory file type detection accepts symbolic-link directory flags', () => {
+  const file = 1;
+  const directory = 2;
+  const symbolicLink = 64;
+
+  assert.equal(isDirectoryFileType(directory, directory), true);
+  assert.equal(isDirectoryFileType(directory | symbolicLink, directory), true);
+  assert.equal(isDirectoryFileType(file | symbolicLink, directory), false);
+});
+
+test('git file marker text requires a gitdir pointer', () => {
+  assert.equal(isGitFileMarkerText('gitdir: ../.git/worktrees/example\n'), true);
+  assert.equal(isGitFileMarkerText('not a git marker'), false);
+  assert.equal(isGitFileMarkerText(''), false);
 });
 
 test('CSV parsing supports quoted commas and escaped quotes', () => {
@@ -206,6 +314,7 @@ test('content and file search args preserve rg flag behavior', () => {
       '--line-number',
       '--column',
       '--hidden',
+      '--no-ignore-vcs',
       '--threads',
       '4',
       '--ignore-case',
@@ -230,6 +339,7 @@ test('content and file search args preserve rg flag behavior', () => {
       '--files',
       '--line-buffered',
       '--hidden',
+      '--no-ignore-vcs',
       '--glob',
       '**/*.ts',
       '--glob',
@@ -240,6 +350,23 @@ test('content and file search args preserve rg flag behavior', () => {
       'tests/**',
       '--glob',
       '!*.snap'
+    ]
+  );
+
+  assert.deepEqual(
+    buildFileSearchArgs(
+      baseOptions({ include: '', exclude: 'power/' }),
+      baseSettings({ includeGlobs: [], excludeGlobs: ['fw/'] })
+    ),
+    [
+      '--files',
+      '--line-buffered',
+      '--hidden',
+      '--no-ignore-vcs',
+      '--glob',
+      '!fw/**',
+      '--glob',
+      '!power/**'
     ]
   );
 });
@@ -371,17 +498,11 @@ test('ctags tag lines parse symbol, path, line, and preview', () => {
     line: 42,
     column: 10,
     endColumn: 16,
-    preview: 'function needle()'
+    preview: 'function needle()',
+    kind: 'f'
   });
 
-  assert.deepEqual(parseTagLine('needle\t/home/alice/src/main.ts\t/^const needle = 1$/;"\tv\tline:7', 'needle', '/tmp'), {
-    name: 'needle',
-    remoteFileAbs: '/home/alice/src/main.ts',
-    line: 7,
-    column: 7,
-    endColumn: 13,
-    preview: 'const needle = 1'
-  });
+  assert.equal(parseTagLine('needle\t/home/alice/src/main.ts\t/^const needle = 1$/;"\tv\tline:7', 'needle', '/tmp'), null);
 
   assert.deepEqual(parseTagLine('needle\tsrc/main.ts\t/^  obj\\.needle = call\\(\\)$/;"\tm\tline:9', 'needle', '/tmp'), {
     name: 'needle',
@@ -389,11 +510,87 @@ test('ctags tag lines parse symbol, path, line, and preview', () => {
     line: 9,
     column: 7,
     endColumn: 13,
-    preview: '  obj.needle = call()'
+    preview: '  obj.needle = call()',
+    kind: 'm'
   });
 
+  assert.equal(parseTagLine('needle\tsrc/main.h\t/^int needle(void);$/;"\tf\tline:3', 'needle', '/tmp'), null);
+  assert.equal(parseTagLine('needle\tsrc/main.h\t/^extern int needle(void);$/;"\tf\tline:4', 'needle', '/tmp'), null);
   assert.equal(parseTagLine('other\tsrc/main.ts\t/^function other()$/;"\tf\tline:1', 'needle', '/tmp'), null);
   assert.equal(parseTagLine('broken line', 'needle', '/tmp'), null);
+});
+
+test('tag index refresh decisions use metadata without rebuilding missing tags in the background', () => {
+  const meta = createTagIndexMeta({
+    gitTop: '/repo',
+    gitHead: 'abc',
+    ctagsVersion: 'Universal Ctags 6.0',
+    ctagsArgsKey: TAG_INDEX_CTAGS_ARGS_KEY
+  }, 1000);
+
+  assert.deepEqual(decideTagIndexRefresh({
+    tagsExists: false,
+    gitTop: '/repo',
+    gitHead: 'abc',
+    ctagsVersion: 'Universal Ctags 6.0',
+    ctagsArgsKey: TAG_INDEX_CTAGS_ARGS_KEY,
+    refreshIntervalMs: 1000,
+    nowMs: 5000
+  }), { refresh: false, reason: 'tags-missing' });
+
+  assert.deepEqual(decideTagIndexRefresh({
+    tagsExists: true,
+    meta,
+    gitTop: '/repo',
+    gitHead: 'abc',
+    ctagsVersion: 'Universal Ctags 6.0',
+    ctagsArgsKey: TAG_INDEX_CTAGS_ARGS_KEY,
+    refreshIntervalMs: 1000,
+    nowMs: 1500
+  }), { refresh: false, reason: 'fresh' });
+
+  assert.deepEqual(decideTagIndexRefresh({
+    tagsExists: true,
+    meta,
+    gitTop: '/repo',
+    gitHead: 'def',
+    ctagsVersion: 'Universal Ctags 6.0',
+    ctagsArgsKey: TAG_INDEX_CTAGS_ARGS_KEY,
+    refreshIntervalMs: 1000,
+    nowMs: 1500
+  }), { refresh: true, reason: 'git-head-changed' });
+
+  assert.deepEqual(decideTagIndexRefresh({
+    tagsExists: true,
+    meta,
+    gitTop: '/repo',
+    gitHead: 'abc',
+    ctagsVersion: 'Universal Ctags 6.0',
+    ctagsArgsKey: TAG_INDEX_CTAGS_ARGS_KEY,
+    refreshIntervalMs: 1000,
+    nowMs: 2500
+  }), { refresh: true, reason: 'refresh-interval' });
+});
+
+test('tag index metadata and rebuild command use tmp file then atomic replace', () => {
+  const paths = getTagIndexPaths('/home/alice/repo');
+  const meta = createTagIndexMeta({
+    gitTop: '/home/alice/repo',
+    gitHead: 'abc',
+    ctagsVersion: 'Universal Ctags 6.0',
+    ctagsArgsKey: TAG_INDEX_CTAGS_ARGS_KEY
+  }, 1000);
+  const command = buildCtagsRebuildCommand('/tmp/ctags', '/home/alice/repo', paths, meta);
+
+  assert.equal(paths.tagsPath, '/home/alice/repo/tags');
+  assert.equal(paths.tmpPath, '/home/alice/repo/tags.tmp');
+  assert.equal(paths.metaPath, '/home/alice/repo/tags.meta.json');
+  assert.equal(parseTagIndexMeta(JSON.stringify(meta))?.gitHead, 'abc');
+  assert.equal(command.includes("-f '/home/alice/repo/tags.tmp'"), true);
+  assert.equal(command.includes("mv -f '/home/alice/repo/tags.tmp' '/home/alice/repo/tags'"), true);
+  assert.equal(command.includes("--exclude='tags'"), true);
+  assert.equal(command.includes("--exclude='tags.tmp'"), true);
+  assert.equal(command.includes("tags.meta.json"), true);
 });
 
 test('JsonLineBuffer emits complete JSON lines across chunks', () => {
@@ -828,4 +1025,28 @@ test('ContentSearchProcessor marks streamed content matches as changed for incre
   })), [
     { relativePath: 'src/main.c', count: 1, preview: 'int needle = 1;' }
   ]);
+});
+
+test('ContentSearchProcessor filters repo-relative paths while preserving workspace display paths', () => {
+  const store = new SearchResultStore();
+  const added = ContentSearchProcessor.processLine({
+    type: 'match',
+    data: {
+      path: { text: 'src/main.c' },
+      lines: { text: 'int needle = 1;\n' },
+      line_number: 7,
+      submatches: [{ start: 4, end: 10 }]
+    }
+  }, (relativePath) => relativePath === 'src/main.c', (relativePath) => ({
+    uriString: `mock://B/${relativePath}`,
+    legacyPath: `/workspace/B/${relativePath}`,
+    relativePath: `B/${relativePath}`,
+    repositoryRelativePath: relativePath
+  }), store);
+
+  const items = store.snapshot('content').items;
+
+  assert.equal(added, 1);
+  assert.equal(items[0]?.relativePath, 'B/src/main.c');
+  assert.equal(items[0]?.matches[0]?.relativePath, 'B/src/main.c');
 });

@@ -956,15 +956,16 @@ mark {
 
 .pathDisplay {
   min-height: 28px;
+  max-height: 120px;
   padding: 5px 8px;
   border: 1px solid color-mix(in srgb, var(--input-border, var(--border)) 70%, transparent);
   border-radius: 2px;
   background: color-mix(in srgb, var(--input-bg) 72%, transparent);
   color: var(--vscode-textLink-foreground, var(--fg));
   font: 12px/1.4 var(--vscode-font-family);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: pre-wrap;
+  overflow: auto;
+  word-break: break-all;
 }
 
 .settingsTextarea {
