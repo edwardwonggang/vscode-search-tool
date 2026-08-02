@@ -30,6 +30,7 @@ import { createProjectSettingsKey, SettingsStore, type SettingsStorage } from '.
 import { shellEscape } from '../src/core/shell';
 import { createSearchPreview, escapeHtml, utf8ByteOffsetToUtf16Index } from '../src/core/text';
 import type { SearchOptions, SearchSettings } from '../src/core/types';
+import { buildDefinitionLocations } from '../src/definition/definitionLocations';
 import {
   buildChmodExecutableCommand,
   buildGitInsideWorkTreeCommand,
@@ -330,6 +331,56 @@ test('remote and local path helpers preserve boundary rules', () => {
   assert.equal(normalizeLocalPath('D:\\Repo\\Src\\'), 'd:/repo/src');
   assert.equal(sameLocalPath('D:\\Repo\\Src\\main.c', 'd:/repo/src/main.c'), true);
   assert.equal(sameLocalPath('D:\\Repo\\Src\\main.c', 'D:\\Repo\\Src\\other.c'), false);
+});
+
+test('definition locations dedupe by uri and keep 1-based line and column', () => {
+  const matches = [
+    {
+      path: 'C:\\repo\\src\\a.c',
+      uri: 'file:///C:/repo/src/a.c',
+      line: 10,
+      column: 5,
+      endColumn: 8,
+      preview: 'int foo(void) {',
+      symbolName: 'foo'
+    },
+    {
+      path: 'C:\\repo\\src\\a.c',
+      uri: 'file:///C:/repo/src/a.c',
+      line: 10,
+      column: 5,
+      endColumn: 8,
+      preview: 'int foo(void) {',
+      symbolName: 'foo'
+    },
+    {
+      path: 'C:\\repo\\src\\b.c',
+      uri: 'file:///C:/repo/src/b.c',
+      line: 3,
+      column: 1,
+      endColumn: 4,
+      preview: 'foo();',
+      symbolName: 'foo'
+    }
+  ];
+  const locations = buildDefinitionLocations(matches);
+  assert.equal(locations.length, 2);
+  assert.deepEqual(locations[0], {
+    uri: 'file:///C:/repo/src/a.c',
+    legacyPath: 'C:\\repo\\src\\a.c',
+    line: 10,
+    column: 5
+  });
+  assert.equal(locations[1].uri, 'file:///C:/repo/src/b.c');
+  assert.equal(locations[1].line, 3);
+  assert.equal(locations[1].column, 1);
+});
+
+test('definition locations skip matches without uri and path', () => {
+  const locations = buildDefinitionLocations([
+    { path: '', uri: '', line: 1, column: 1, endColumn: 2, preview: '' }
+  ]);
+  assert.deepEqual(locations, []);
 });
 
 test('git repository discovery scans up to three levels and stops below discovered roots', async () => {

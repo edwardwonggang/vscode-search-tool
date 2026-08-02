@@ -9,6 +9,7 @@
     "src/core/**/*.ts",
     "src/remote/**/*.ts",
     "src/workspace/**/*.ts",
+    "src/definition/definitionLocations.ts",
     "tests/**/*.ts"
   ]
 }
