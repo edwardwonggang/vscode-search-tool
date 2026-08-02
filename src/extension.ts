@@ -9,6 +9,7 @@ import { buildIconUris, renderFallbackHtml, renderSearchViewHtml } from './webvi
 import { createServices, type Services } from './session/ServiceFactory';
 import { resolveMatchSelection } from './search/MatchNavigation';
 import type { SearchRepository, WorkspaceInfo } from './workspace/WorkspaceResolver';
+import { RipgrepDefinitionProvider } from './definition/RipgrepDefinitionProvider';
 
 const SEARCH_VIEW_HTML_RELATIVE_PATH = 'media/search-view.html';
 const SEARCH_VIEW_CSS_RELATIVE_PATH = 'media/search-view.css';
@@ -18,6 +19,20 @@ const SEARCH_SETTINGS_PANEL_JS_RELATIVE_PATH = 'media/search-settings-panel.js';
 const SEARCH_ICONS_JS_RELATIVE_PATH = 'media/search-icons.js';
 const SEARCH_VIEW_JS_RELATIVE_PATH = 'media/search-view.js';
 const SSH_KEEPALIVE_CHECK_MS = 60000;
+// 定义提供器覆盖的语言：远端 ctags 索引的 C/C++ 家族（避免干扰其他语言的语言服务器）。
+const DEFINITION_LANGUAGE_SELECTOR: vscode.DocumentSelector = [
+  { language: 'c' },
+  { language: 'cpp' },
+  { language: 'cxx' },
+  { language: 'cc' },
+  { language: 'h' },
+  { language: 'hpp' },
+  { language: 'hh' },
+  { language: 'hxx' },
+  { language: 'cuda-cpp' },
+  { language: 'objective-c' },
+  { language: 'objective-cpp' }
+];
 const CODICON_ICON_RELATIVE_PATHS = {
   caseSensitive: 'media/icons/codicons/case-sensitive.svg',
   wholeWord: 'media/icons/codicons/whole-word.svg',
@@ -195,29 +210,18 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
             void vscode.window.showErrorMessage(workspaceInfo.workspaceError || await this.services.translationService.translate('workspace_none'));
             return;
           }
-          const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-          if (!workspaceFolder) {
-            return;
-          }
           if (!workspaceInfo.hasGit) {
             void vscode.window.showInformationMessage(await this.services.translationService.translate('definition_requires_git'));
             return;
           }
-          const settings = this.getSettings();
-          if (!this.services.connectionController.isRemoteSearchConfigured(settings)) {
+          if (!this.services.connectionController.isRemoteSearchConfigured(this.getSettings())) {
             void vscode.window.showInformationMessage(await this.services.translationService.translate('connection_required'));
             return;
           }
-
-          const matches = await this.services.searchCoordinator.lookupDefinitions(
+          const uniqueMatches = await this.lookupDefinitionMatches(
             symbol,
-            settings,
-            workspaceFolder,
-            workspaceInfo.repositories,
             (phase) => progress.report({ message: phase })
           );
-
-          const uniqueMatches = dedupeMatches(matches);
           if (uniqueMatches.length === 0) {
             void vscode.window.showInformationMessage(
               await this.services.translationService.format('goto_def_not_found', { symbol })
@@ -236,6 +240,45 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
         }
       }
     );
+  }
+
+  /**
+   * 创建定义提供器：内置 Ctrl+点击 / F12 通过 VS Code 原生定义入口复用远端 ctags 查找。
+   */
+  public createDefinitionProvider(): RipgrepDefinitionProvider {
+    return new RipgrepDefinitionProvider((symbol, onPhase) =>
+      this.lookupDefinitionMatches(symbol, onPhase)
+    );
+  }
+
+  /**
+   * 执行远端 ctags 定义查找：校验工作区/Git/SSH 配置后返回去重后的匹配。
+   * 供右键命令与内置 DefinitionProvider（Ctrl+点击 / F12）共用。
+   */
+  private async lookupDefinitionMatches(
+    symbol: string,
+    onPhase?: (phase: string) => void
+  ): Promise<SearchMatch[]> {
+    const workspaceInfo = await this.getCachedWorkspaceInfo();
+    if (!workspaceInfo.workspaceOk || !workspaceInfo.hasGit) {
+      return [];
+    }
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    if (!workspaceFolder) {
+      return [];
+    }
+    const settings = this.getSettings();
+    if (!this.services.connectionController.isRemoteSearchConfigured(settings)) {
+      return [];
+    }
+    const matches = await this.services.searchCoordinator.lookupDefinitions(
+      symbol,
+      settings,
+      workspaceFolder,
+      workspaceInfo.repositories,
+      onPhase
+    );
+    return dedupeMatches(matches);
   }
 
   public async openLogFileInEditor(): Promise<void> {
@@ -642,6 +685,10 @@ export function activate(context: vscode.ExtensionContext): void {
   const provider = new RipgrepSearchViewProvider(context);
   context.subscriptions.push(
     provider,
+    vscode.languages.registerDefinitionProvider(
+      DEFINITION_LANGUAGE_SELECTOR,
+      provider.createDefinitionProvider()
+    ),
     vscode.window.registerWebviewViewProvider(RipgrepSearchViewProvider.viewType, provider, {
       webviewOptions: {
         retainContextWhenHidden: true

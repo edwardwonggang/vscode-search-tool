@@ -259,7 +259,7 @@ ctags 的索引覆盖范围是当前 Git 根目录本身及其全部子目录。
 ### 9.4 右键“转到定义”
 
 - 在任意文本编辑器中，把光标停在函数名、宏、结构体/类名、typedef 名或变量名上，右键菜单提供“Ripgrep: Go to Definition”。
-- 也支持 `Ctrl+Alt+鼠标左键`（macOS 为 `Cmd+Alt+点击`）直接触发跳转定义；不再绑定 `Ctrl+点击`，避免与 VS Code 内置“转到定义”的默认快捷键冲突。
+- 也支持 `Ctrl+鼠标左键`（macOS 为 `Cmd+点击`）与 `F12` 直接触发跳转定义：扩展注册了 VS Code 内置定义提供器（DefinitionProvider），编辑器原生 Ctrl+点击/F12 会直接走远端 ctags 查找，不再需要自定义快捷键绑定。
 - 命令取光标下的完整标识符，通过 Linux 远端 ctags 索引做精确匹配。
 - 触发后立即显示系统进度通知，阶段信息（如“Searching definitions…”/“Checking remote Git root…”）随远端执行实时更新；搜索完成或失败时通知自动消失。
 - 只有一个匹配时直接打开定义位置；多个匹配时在窗口中央弹出悬浮候选列表（QuickPick）。
