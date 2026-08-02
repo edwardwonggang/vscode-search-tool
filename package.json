@@ -2,7 +2,7 @@
   "name": "ripgreptool",
   "displayName": "Ripgrep Tool",
   "description": "Remote ripgrep search in the sidebar. Limits and setup are in the README (extension details), not in the in-editor UI.",
-  "version": "0.0.82",
+  "version": "0.0.83",
   "publisher": "local",
   "license": "UNLICENSED",
   "extensionKind": [
@@ -102,15 +102,6 @@
           "description": "Default exclude globs applied to definition search results, including the right-click Go to Definition command."
         }
       }
-    },
-    "menus": {
-      "editor/context": [
-        {
-          "command": "ripgrepTool.goToDefinition",
-          "group": "navigation@9",
-          "when": "editorTextFocus"
-        }
-      ]
     }
   },
   "scripts": {
