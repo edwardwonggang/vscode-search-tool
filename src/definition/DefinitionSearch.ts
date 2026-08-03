@@ -8,15 +8,15 @@ import type { RemoteToolInstaller } from '../remote/RemoteToolInstaller';
 import type { ResolvedSearchRepository, WorkspaceResolver } from '../workspace/WorkspaceResolver';
 import type { SessionLogger } from '../session/SessionLogger';
 import { parseTagLine } from './ctags';
-import { escapeRegExpString } from '../core/glob';
-import { buildGitTopCommand, buildGitInsideWorkTreeCommand, buildRemoteFileExistsCommand, buildExecutableVersionCommand } from '../remote/commands';
-import { shellEscape } from '../core/shell';
+import { buildExecutableVersionCommand } from '../remote/commands';
 import type { SearchSession } from '../session/SearchSession';
 import type { WebviewMessageRouter } from '../search/WebviewMessageRouter';
 import type { ConnectionController } from '../session/ConnectionController';
 import { createDefinitionResultPathFilter } from '../core/glob';
 import { StreamingLineProcessor } from '../search/StreamingLineProcessor';
 import { filterRipgrepStderr, isIgnorableRipgrepFailure } from '../session/rgDiagnostics';
+import { buildTagProbeCommand, parseTagProbe, type TagProbeResult } from './tagProbe';
+import { buildBoundedTagSearchCommand } from './tagSearch';
 import {
   TAG_INDEX_CTAGS_ARGS_KEY,
   buildCtagsRebuildCommand,
@@ -77,34 +77,38 @@ export class DefinitionSearch {
         this.logger.log(`def-search#${token} cancelled after getting client`);
         return false;
       }
-      this.logger.log(`def-search#${token} ensuring rg`);
-      this.session.postPhase('Checking remote ripgrep...');
-      await this.remoteToolInstaller.ensureRg(client);
-      this.logger.log(`def-search#${token} ensuring ctags`);
-      this.session.postPhase('Checking remote ctags...');
-      const ctagsPath = await this.remoteToolInstaller.ensureCtags(
-        client,
-        await this.translationService.translate('err_ctags_missing')
-      );
-      this.logger.log(`def-search#${token} ctags at ${ctagsPath}`);
 
-      this.logger.log(`def-search#${token} getting git top`);
-      this.session.postPhase('Resolving remote Git root...');
-      const gitTop = await this.getRemoteGitTop(client, remoteCwd, token);
-      if (!this.session.isCurrent(token) || !gitTop) {
-        this.logger.log(`def-search#${token} cancelled or no git top`);
+      this.logger.log(`def-search#${token} running remote probe`);
+      this.session.postPhase('Probing remote environment...');
+      const probe = await this.runTagProbe(client, remoteCwd, token);
+      if (!this.session.isCurrent(token)) {
+        this.logger.log(`def-search#${token} cancelled after probe`);
         return false;
       }
+      if (!probe || !probe.gitTop || probe.insideWorkTree !== 'true') {
+        throw new Error(await this.translationService.translate('err_not_git_workspace'));
+      }
+      const gitTop = probe.gitTop;
+      this.logger.log(
+        `def-search#${token} probe gitTop="${gitTop}" rg=${probe.rgVersion ? 'present' : 'missing'} ctags=${probe.ctagsVersion ? 'present' : 'missing'} tags=${probe.tagsExists ? 'y' : 'n'}`
+      );
       this.logger.log(`def-search#${token} gitTop="${gitTop}"`);
 
-      const tagIndexPaths = getTagIndexPaths(gitTop);
-      const tagsPath = tagIndexPaths.tagsPath;
+      const tagsPath = getTagIndexPaths(gitTop).tagsPath;
       this.logger.log(`def-search#${token} tagsPath=${tagsPath}`);
-      const exists = await this.remoteFileExists(client, tagsPath);
-      this.logger.log(`def-search#${token} tags exists=${exists}`);
-      if (!exists) {
+      if (!probe.tagsExists) {
         this.logger.log(`def-search#${token} running ctags build`);
-        await this.runRemoteCtagsBuild(client, ctagsPath, gitTop, token, messageRouter);
+        this.session.postPhase('Checking remote ctags...');
+        const ctagsPath = await this.remoteToolInstaller.ensureCtags(
+          client,
+          await this.translationService.translate('err_ctags_missing'),
+          probe.ctagsVersion
+        );
+        if (!this.session.isCurrent(token)) {
+          return false;
+        }
+        this.logger.log(`def-search#${token} ctags at ${ctagsPath}`);
+        await this.runRemoteCtagsBuild(client, ctagsPath, gitTop, token, messageRouter, probe.gitHead, probe.ctagsVersion);
         if (!this.session.isCurrent(token)) {
           return false;
         }
@@ -117,11 +121,10 @@ export class DefinitionSearch {
         });
       }
 
-      const pattern = `^${escapeRegExpString(query)}\t`;
       const tagsDir = posixPath.dirname(tagsPath);
       const tagsBase = posixPath.basename(tagsPath);
-      this.logger.log(`def-search#${token} searching tags with pattern="${pattern}" in ${tagsBase}`);
-      const rgLine = `cd ${shellEscape(tagsDir)} && ${shellEscape(this.remoteToolInstaller.remoteRgPath)} -N --line-buffered --pcre2 ${shellEscape(pattern)} ${shellEscape(tagsBase)}`;
+      this.logger.log(`def-search#${token} searching tags (bounded) query="${query}" in ${tagsBase}`);
+      const rgLine = buildBoundedTagSearchCommand(tagsDir, tagsBase, query);
       this.session.postPhase('Searching tag index...');
 
       let totalLines = 0;
@@ -271,32 +274,24 @@ export class DefinitionSearch {
     return undefined;
   }
 
-  private async getRemoteGitTop(client: Client, remoteCwd: string, token: number): Promise<string> {
-    const cmd = buildGitTopCommand(remoteCwd);
-    const r = await this.remoteExecutor.execWithExitCode(client, cmd);
+  /**
+   * 执行合并远端探针：一次 exec 返回 git 根、工作树状态、rg/ctags 版本、
+   * tags 是否存在与 git HEAD，减少定义搜索的串行往返次数。
+   */
+  private async runTagProbe(client: Client, remoteCwd: string, token: number): Promise<TagProbeResult | undefined> {
+    const command = buildTagProbeCommand(
+      remoteCwd,
+      this.remoteToolInstaller.remoteRgPath,
+      this.remoteToolInstaller.remoteCtagsPath
+    );
+    const r = await this.remoteExecutor.execWithExitCode(client, command);
     if (!this.session.isCurrent(token)) {
-      return '';
+      return undefined;
     }
-    if (r.code !== 0) {
-      throw new Error(await this.translationService.translate('err_not_git_workspace'));
+    if (r.code !== 0 && r.code !== undefined) {
+      throw new Error(r.stderr.trim() || r.stdout.trim() || `Remote probe failed with exit code ${r.code}.`);
     }
-    const top = r.stdout.split(/\r?\n/u)[0]?.trim() ?? '';
-    if (!top) {
-      throw new Error(await this.translationService.translate('err_not_git_workspace'));
-    }
-    const tree = await this.remoteExecutor.execWithExitCode(client, buildGitInsideWorkTreeCommand(remoteCwd));
-    if (!this.session.isCurrent(token)) {
-      return '';
-    }
-    if (tree.stdout.trim() !== 'true') {
-      throw new Error(await this.translationService.translate('err_not_git_workspace'));
-    }
-    return top;
-  }
-
-  private async remoteFileExists(client: Client, remotePath: string): Promise<boolean> {
-    const r = await this.remoteExecutor.execWithExitCode(client, buildRemoteFileExistsCommand(remotePath));
-    return r.stdout.trim() === 'y' && (r.code == null || r.code === 0);
+    return parseTagProbe(r.stdout);
   }
 
   private async runRemoteCtagsBuild(
@@ -304,7 +299,9 @@ export class DefinitionSearch {
     ctagsPath: string,
     gitTop: string,
     token: number,
-    messageRouter: WebviewMessageRouter
+    messageRouter: WebviewMessageRouter,
+    knownGitHead = '',
+    knownCtagsVersion = ''
   ): Promise<void> {
     const buildSummary = await this.translationService.translate('ctags_building');
     const buildFailedMessage = await this.translationService.translate('ctags_build_failed');
@@ -312,8 +309,9 @@ export class DefinitionSearch {
 
     this.session.postState({ type: 'state', running: true, summary: buildSummary, ctagsInProgress: true });
     const tagIndexPaths = getTagIndexPaths(gitTop);
-    const gitHead = await this.getGitHead(client, gitTop);
-    const ctagsVersion = await this.getCtagsVersion(client, ctagsPath);
+    // 探针已返回 git HEAD 与 ctags 版本时直接复用，避免再发两次远端 exec。
+    const gitHead = knownGitHead || await this.getGitHead(client, gitTop);
+    const ctagsVersion = knownCtagsVersion || await this.getCtagsVersion(client, ctagsPath);
     const command = buildCtagsRebuildCommand(
       ctagsPath,
       gitTop,

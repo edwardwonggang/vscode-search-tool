@@ -87,6 +87,7 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
   private keepaliveTimer?: NodeJS.Timeout;
   private autoConnectInFlight = false;
   private latestSearchRequestId = 0;
+  private inFlightDefinitionLookup?: { key: string; promise: Promise<SearchMatch[]> };
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.services = createServices(context);
@@ -271,14 +272,26 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     if (!this.services.connectionController.isRemoteSearchConfigured(settings)) {
       return [];
     }
-    const matches = await this.services.searchCoordinator.lookupDefinitions(
-      symbol,
-      settings,
-      workspaceFolder,
-      workspaceInfo.repositories,
-      onPhase
-    );
-    return dedupeMatches(matches);
+    // 同一符号的重复触发（如连续 Ctrl+点击 / F12）复用同一个在途查找，
+    // 避免并发多次远端搜索叠加 SSH 负载导致抖动。
+    const key = `${symbol}|${settings.remoteHost}|${settings.remotePort}|${settings.remoteUsername}|${settings.remoteSearchPath}`;
+    if (this.inFlightDefinitionLookup && this.inFlightDefinitionLookup.key === key) {
+      this.services.logger.debug(`definition lookup reused in-flight symbol=${symbol}`);
+      return await this.inFlightDefinitionLookup.promise;
+    }
+    const search = this.services.searchCoordinator
+      .lookupDefinitions(symbol, settings, workspaceFolder, workspaceInfo.repositories, onPhase)
+      .then((matches) => dedupeMatches(matches));
+    const tracked = search.finally(() => {
+      if (this.inFlightDefinitionLookup && this.inFlightDefinitionLookup.promise === tracked) {
+        this.inFlightDefinitionLookup = undefined;
+      }
+    });
+    this.inFlightDefinitionLookup = {
+      key,
+      promise: tracked
+    };
+    return await tracked;
   }
 
   public async openLogFileInEditor(): Promise<void> {

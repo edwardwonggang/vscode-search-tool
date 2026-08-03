@@ -30,21 +30,20 @@ export class RemoteGitRootGuard {
     }
 
     const client = await this.connectionController.getOrCreateClient(settings);
-    if (!this.session.isCurrent(token)) {
-      return;
-    }
-
     const result = await this.remoteExecutor.execWithExitCode(client, buildGitTopCommand(remoteCwd));
+    const top = result.stdout.split(/\r?\n/u)[0]?.trim() ?? '';
+    const valid = result.code === 0 && top !== '' && normalizeRemotePath(top) === normalizeRemotePath(remoteCwd);
+    // 验证结论与搜索令牌无关，只要 host/user/cwd 不变就缓存复用；
+    // 令牌仅用于决定是否需要抛出错误（过期搜索的错误不向 UI 冒泡）。
+    if (valid) {
+      this.verifiedKeys.add(key);
+    }
     if (!this.session.isCurrent(token)) {
       return;
     }
-
-    const top = result.stdout.split(/\r?\n/u)[0]?.trim() ?? '';
-    if (result.code !== 0 || !top || normalizeRemotePath(top) !== normalizeRemotePath(remoteCwd)) {
+    if (!valid) {
       throw new Error(await this.translationService.translate('git_root_required'));
     }
-
-    this.verifiedKeys.add(key);
   }
 }
 

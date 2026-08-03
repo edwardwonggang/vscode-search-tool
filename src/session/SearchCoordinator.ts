@@ -196,12 +196,7 @@ export class SearchCoordinator {
     const lookupPreflight = new RemoteSearchPreflight(
       this.workspaceResolver,
       this.translationService,
-      new RemoteGitRootGuard(
-        this.connectionController,
-        this.remoteExecutor,
-        this.translationService,
-        lookupSession
-      ),
+      this.remoteGitRootGuard,
       lookupSession
     );
     const lookupDefinitionSearch = new DefinitionSearch(
