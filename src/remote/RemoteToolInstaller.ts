@@ -34,15 +34,24 @@ export class RemoteToolInstaller {
     return this.options.remoteRgPath;
   }
 
+  public get remoteCtagsPath(): string {
+    return this.options.remoteCtagsPath;
+  }
+
   public clearCache(): void {
     this.remoteRgInstallPromise = undefined;
   }
 
-  public async ensureRg(client: Client): Promise<string> {
+  public async ensureRg(client: Client, knownVersion?: string): Promise<string> {
     const remoteRgPath = this.options.remoteRgPath;
     const localRgPath = this.options.asAbsolutePath(this.options.bundledRgRelativePath);
     const localRgStat = await fs.stat(localRgPath);
     const bundledSignature = `${remoteRgPath}|${localRgStat.size}|${localRgStat.mtimeMs}`;
+    // 定义搜索的合并探针已确认远端 rg 存在时，跳过 --version 往返。
+    if (knownVersion) {
+      this.options.logger.debug(`remote rg already present: ${knownVersion}`);
+      return remoteRgPath;
+    }
     const existingVersion = await this.getRemoteExecutableVersion(client, remoteRgPath);
     if (existingVersion) {
       this.options.logger.debug(`remote rg already present: ${existingVersion}`);
@@ -63,7 +72,12 @@ export class RemoteToolInstaller {
     }
   }
 
-  public async ensureCtags(client: Client, missingMessage: string): Promise<string> {
+  public async ensureCtags(client: Client, missingMessage: string, knownVersion?: string): Promise<string> {
+    // 定义搜索的合并探针已确认远端 ctags 存在时，跳过 --version 往返。
+    if (knownVersion) {
+      this.options.logger.debug(`remote ctags already present: ${knownVersion}`);
+      return this.options.remoteCtagsPath;
+    }
     const localCtags = this.options.asAbsolutePath(this.options.bundledCtagsRelativePath);
     try {
       await fs.access(localCtags);

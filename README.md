@@ -16,6 +16,7 @@ Built-in rg for Linux is shipped for the remote; local Windows workspaces are ma
 - Streaming results: content search and file search update the webview while remote output is still arriving.
 - UI refresh: ripgrepTool.resultRefreshMs controls how often the webview updates while results stream; it does not stop the search. The default is 80 ms so large searches show partial results quickly.
 - Threads / context: ripgrepTool.threads and ripgrepTool.contextLines are passed through to rg within the ranges in Settings.
+- Definition search speed: each lookup runs one combined remote probe (git root, rg/ctags presence, tags freshness) and then a bounded scan of the sorted ctags index - grep stops at the first matching name and only the matching block is read, so a multi-hundred-MB `tags` file is not fully scanned per query. The bundled universal-ctags writes a sorted index; keep that index format for the bounded scan to stay correct. On high-latency SSH links each remote round trip still costs roughly 0.5-1.5 s, so the first lookup after a fresh connection and any ctags rebuild remain slower than warm lookups.
 
 Heavy searches can be slow or memory-heavy because the extension no longer applies artificial result limits.
 
