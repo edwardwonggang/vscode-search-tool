@@ -190,6 +190,20 @@ export class SearchCoordinator {
     }, lookupStore);
     const token = lookupSession.begin();
     const silentRouter = new WebviewMessageRouter();
+    // 定义搜索使用与 lookupSession 绑定的独立 preflight：复用它绑定主 session 的
+    // preflight 时，postPhase 会走从未 begin 的主 session，elapsedMs 变成当前时间戳，
+    // webview 计时器会用该值反推 startedAt 为 0 并持续累加显示。
+    const lookupPreflight = new RemoteSearchPreflight(
+      this.workspaceResolver,
+      this.translationService,
+      new RemoteGitRootGuard(
+        this.connectionController,
+        this.remoteExecutor,
+        this.translationService,
+        lookupSession
+      ),
+      lookupSession
+    );
     const lookupDefinitionSearch = new DefinitionSearch(
       lookupSession,
       lookupStore,
@@ -203,7 +217,7 @@ export class SearchCoordinator {
     );
 
     try {
-      const resolved = await this.remoteSearchPreflight.prepareDefinitionRepositories(
+      const resolved = await lookupPreflight.prepareDefinitionRepositories(
         settings,
         workspaceFolder,
         repositories,

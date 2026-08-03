@@ -608,10 +608,14 @@
       stopProgressTimer();
       return;
     }
+    const reportedElapsedMs = Number(statePayload.elapsedMs || 0);
+    const startedAt = reportedElapsedMs > 0 && reportedElapsedMs < 24 * 60 * 60 * 1000
+      ? Date.now() - reportedElapsedMs
+      : Date.now();
     progressInfo = {
       requestId: Number(statePayload.requestId || activeSearchRequestId),
       mode: currentResultMode,
-      startedAt: Date.now() - Number(statePayload.elapsedMs || 0),
+      startedAt,
       fileCount: Number(statePayload.fileCount || 0),
       matchCount: Number(statePayload.matchCount || 0),
       running: true
