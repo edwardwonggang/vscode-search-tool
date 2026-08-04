@@ -1,4 +1,3 @@
-import { splitUserGlobs } from '../core/glob';
 import type { SearchOptions, SearchSettings } from '../core/types';
 
 export type FgrContentPlan =
@@ -9,6 +8,8 @@ export type FgrContentPlan =
  * 判断内容搜索是否可以用 fast-grep 索引路径，并构造 fgr 参数。
  * fgr 不支持整词匹配、管道模式不输出上下文行、也不提供 JSON 输出，
  * 这些场景回退到 ripgrep 以保证语义不缺失。
+ * 注意：fgr 0.3.1 的 --include/--exclude 实测不生效，因此文件过滤全部交给
+ * 扩展侧 resultPathFilter 完成，与 rg 路径的 glob 语义保持一致。
  */
 export function planFgrContentSearch(
   options: SearchOptions,
@@ -28,18 +29,6 @@ export function planFgrContentSearch(
   }
   if (!options.useRegex) {
     args.push('-F');
-  }
-  for (const glob of settings.includeGlobs) {
-    args.push('--include', glob);
-  }
-  for (const glob of splitUserGlobs(options.include)) {
-    args.push('--include', glob);
-  }
-  for (const glob of settings.excludeGlobs) {
-    args.push('--exclude', glob);
-  }
-  for (const glob of splitUserGlobs(options.exclude)) {
-    args.push('--exclude', glob);
   }
   return { usable: true, args };
 }
