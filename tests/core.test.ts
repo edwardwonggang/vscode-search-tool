@@ -58,7 +58,7 @@ import { JsonLineBuffer } from '../src/search/JsonLineBuffer';
 import { resolveMatchSelection } from '../src/search/MatchNavigation';
 import { mergeResultItems } from '../src/search/WebviewMessageRouter';
 import { buildContentSearchArgs, buildFileSearchArgs } from '../src/session/rgArgs';
-import { filterRipgrepStderr, isIgnorableRipgrepFailure } from '../src/session/rgDiagnostics';
+import { filterRipgrepStderr, isIgnorableRipgrepFailure, isRemoteExecutableMissing } from '../src/session/rgDiagnostics';
 import { ContentSearchProcessor } from '../src/session/ContentSearchProcessor';
 import { SearchSession } from '../src/session/SearchSession';
 import { createRemoteGitRootKey } from '../src/session/RemoteGitRootGuard';
@@ -539,7 +539,7 @@ test('content and file search args preserve rg flag behavior', () => {
   );
 });
 
-test('RemoteToolInstaller rechecks remote rg and silently reuploads after remote temp loss', async () => {
+test('RemoteToolInstaller caches confirmed remote rg and reuploads after invalidation', async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ripgreptool-test-'));
   const localRgPath = path.join(tempDir, 'rg');
   await fs.writeFile(localRgPath, 'mock rg', 'utf8');
@@ -584,7 +584,13 @@ test('RemoteToolInstaller rechecks remote rg and silently reuploads after remote
 
   try {
     assert.equal(await installer.ensureRg({} as any), '/tmp/ripgreptool-rg');
+    // 缓存确认后不再往返 --version：每次普通搜索省一次 SSH 往返。
     remoteHasRg = false;
+    assert.equal(await installer.ensureRg({} as any), '/tmp/ripgreptool-rg');
+    // 搜索层检测到 /tmp 丢失（rg 缺失）后使缓存失效 → 重新检查并静默重传。
+    installer.invalidateRg();
+    assert.equal(await installer.ensureRg({} as any), '/tmp/ripgreptool-rg');
+    // 重传成功后再次进入缓存确认状态。
     assert.equal(await installer.ensureRg({} as any), '/tmp/ripgreptool-rg');
   } finally {
     await fs.rm(tempDir, { recursive: true, force: true });
@@ -843,6 +849,33 @@ test('StreamingLineProcessor processes large streams in bounded slices', async (
   assert.deepEqual(lines, ['a', 'b', 'c', 'd']);
   assert.equal(processor.stats.processedLines, 4);
   assert.equal(processor.stats.yieldedSlices >= 1, true);
+});
+
+test('StreamingLineProcessor drops oversized lines and keeps memory bounded', async () => {
+  const lines: string[] = [];
+  const processor = new StreamingLineProcessor({
+    maxLinesPerSlice: 2,
+    maxSliceMs: 1000,
+    maxLineChars: 16,
+    onLine: (line) => lines.push(line)
+  });
+
+  processor.push('small\n');
+  processor.push('this-is-an-oversized-line-without-a-newline-so-far\n');
+  processor.push('after\n');
+  await processor.flush();
+
+  assert.deepEqual(lines, ['small', 'after']);
+  assert.equal(processor.stats.oversizedLines, 1);
+  assert.equal(processor.stats.maxBufferedChars <= 16, true);
+});
+
+test('remote executable missing detection uses exit 127 with not-found diagnostics', () => {
+  assert.equal(isRemoteExecutableMissing({ code: 127, stderr: '/bin/sh: /tmp/rg: No such file or directory' }), true);
+  assert.equal(isRemoteExecutableMissing({ code: 127, stderr: 'sh: rg: command not found' }), true);
+  assert.equal(isRemoteExecutableMissing({ code: 126, stderr: 'permission denied' }), false);
+  assert.equal(isRemoteExecutableMissing({ code: 2, stderr: 'unexpected argument' }), false);
+  assert.equal(isRemoteExecutableMissing({ code: 127, stderr: '' }), false);
 });
 
 test('SearchResultStore groups, sorts, snapshots, and clears results', () => {

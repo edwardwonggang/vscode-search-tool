@@ -3,7 +3,9 @@ import type { ContentSearchEntry } from './ContentSearchProcessor';
 import type { SearchOptions, SearchSettings } from '../core/types';
 import type { SearchResultStore } from '../search/SearchResultStore';
 import type { RemoteExecutor } from '../remote/RemoteExecutor';
+import type { RemoteExecResult } from '../remote/RemoteExecutor';
 import type { RemoteToolInstaller } from '../remote/RemoteToolInstaller';
+import type { Client } from 'ssh2';
 import type { ResolvedSearchRepository, WorkspaceResolver } from '../workspace/WorkspaceResolver';
 import type { SessionLogger } from './SessionLogger';
 import { ContentSearchProcessor } from './ContentSearchProcessor';
@@ -14,7 +16,7 @@ import type { SearchSession } from './SearchSession';
 import type { WebviewMessageRouter } from '../search/WebviewMessageRouter';
 import type { ConnectionController } from './ConnectionController';
 import { StreamingLineProcessor } from '../search/StreamingLineProcessor';
-import { filterRipgrepStderr, isIgnorableRipgrepFailure } from './rgDiagnostics';
+import { filterRipgrepStderr, isIgnorableRipgrepFailure, isRemoteExecutableMissing } from './rgDiagnostics';
 
 export type ContentSearchConfig = {
   contextLines: number;
@@ -107,11 +109,9 @@ export class ContentSearchRunner {
         }
       });
 
-      const result = await this.remoteExecutor.execStreamingWithExitCode(client, command, {
-        trackAsActive: true,
-        collectStdout: false,
-        onStdout: (chunk) => lineBuffer.push(chunk)
-      });
+      // 远端 rg 丢失（如 /tmp 被重启清理）时静默重传并重试一次；搜索本身不设墙钟超时，
+      // 大结果搜索由用户切换/取消来终止，避免 30 秒默认超时截断长搜索。
+      const result = await this.runSearchCommand(client, command, lineBuffer, token);
       if (!firstResultLogged) {
         this.session.startProgress('content');
       }
@@ -178,6 +178,35 @@ export class ContentSearchRunner {
 
   private createTarget(repository: ResolvedSearchRepository, remoteRelativePath: string) {
     return this.workspaceResolver.createWorkspaceTarget(repository, remoteRelativePath);
+  }
+
+  private async runSearchCommand(
+    client: Client,
+    command: string,
+    lineBuffer: StreamingLineProcessor,
+    token: number
+  ) {
+    const maxAttempts = 2;
+    let lastResult: RemoteExecResult = { stdout: '', stderr: '', code: 127 };
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const result = await this.remoteExecutor.execStreamingWithExitCode(client, command, {
+        trackAsActive: true,
+        collectStdout: false,
+        timeoutMs: 0,
+        onStdout: (chunk) => lineBuffer.push(chunk)
+      });
+      lastResult = result;
+      if (!isRemoteExecutableMissing(result)) {
+        return result;
+      }
+      this.logger.log(`search#${token} remote rg missing (attempt ${attempt}); re-uploading silently`);
+      this.remoteToolInstaller.invalidateRg();
+      await this.remoteToolInstaller.ensureRg(client);
+      if (!this.session.isCurrent(token)) {
+        return result;
+      }
+    }
+    return lastResult;
   }
 
   private buildSummary(elapsedMs: number, totalMatches: number): string {

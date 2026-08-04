@@ -15,8 +15,8 @@ import type { ConnectionController } from '../session/ConnectionController';
 import { createDefinitionResultPathFilter } from '../core/glob';
 import { StreamingLineProcessor } from '../search/StreamingLineProcessor';
 import { filterRipgrepStderr, isIgnorableRipgrepFailure } from '../session/rgDiagnostics';
-import { buildTagProbeCommand, parseTagProbe, type TagProbeResult } from './tagProbe';
-import { buildBoundedTagSearchCommand } from './tagSearch';
+import { TAG_PROBE_PREFIX, parseTagProbe } from './tagProbe';
+import { buildTagProbeAndSearchCommand, buildTagSearchCommand } from './tagSearch';
 import {
   TAG_INDEX_CTAGS_ARGS_KEY,
   buildCtagsRebuildCommand,
@@ -78,13 +78,38 @@ export class DefinitionSearch {
         return false;
       }
 
-      this.logger.log(`def-search#${token} running remote probe`);
-      this.session.postPhase('Probing remote environment...');
-      const probe = await this.runTagProbe(client, remoteCwd, token);
+      // 合并探针与扫描为一次 SSH 往返：探针元数据（git 根/rg/ctags/tags/git HEAD）先输出，
+      // tags 存在时同一条流内继续输出该符号的匹配块，减少慢链路上的往返次数。
+      this.logger.log(`def-search#${token} running combined probe + tag search`);
+      this.session.postPhase('Searching definitions...');
+      const probeLines: string[] = [];
+      let probeGitTop = '';
+      await this.streamTagSearch(
+        client,
+        buildTagProbeAndSearchCommand(
+          remoteCwd,
+          this.remoteToolInstaller.remoteRgPath,
+          this.remoteToolInstaller.remoteCtagsPath,
+          query
+        ),
+        token,
+        query,
+        repository,
+        () => probeGitTop,
+        startedAt,
+        definitionPathFilter,
+        (line) => {
+          probeLines.push(line);
+          if (line.startsWith(`${TAG_PROBE_PREFIX}gitTop=`)) {
+            probeGitTop = line.slice(`${TAG_PROBE_PREFIX}gitTop=`.length);
+          }
+        }
+      );
       if (!this.session.isCurrent(token)) {
-        this.logger.log(`def-search#${token} cancelled after probe`);
+        this.logger.log(`def-search#${token} cancelled after combined probe+search`);
         return false;
       }
+      const probe = parseTagProbe(probeLines.join('\n'));
       if (!probe || !probe.gitTop || probe.insideWorkTree !== 'true') {
         throw new Error(await this.translationService.translate('err_not_git_workspace'));
       }
@@ -112,87 +137,24 @@ export class DefinitionSearch {
         if (!this.session.isCurrent(token)) {
           return false;
         }
-      } else {
-        this.session.postState({
-          type: 'state',
-          running: true,
-          ctagsInProgress: false,
-          summary: await this.translationService.translate('def_searching')
-        });
-      }
-
-      const tagsDir = posixPath.dirname(tagsPath);
-      const tagsBase = posixPath.basename(tagsPath);
-      this.logger.log(`def-search#${token} searching tags (bounded) query="${query}" in ${tagsBase}`);
-      const rgLine = buildBoundedTagSearchCommand(tagsDir, tagsBase, query);
-      this.session.postPhase('Searching tag index...');
-
-      let totalLines = 0;
-      let firstResultLogged = false;
-      const lineBuffer = new StreamingLineProcessor({
-        shouldContinue: () => this.session.isCurrent(token),
-        onLine: (line) => {
-          if (!this.session.isCurrent(token)) {
-            return;
-          }
-          totalLines += 1;
-          const m = this.parseTagResultLine(line, query, repository, tagsDir);
-          if (!m) {
-            return;
-          }
-          const filterRelativePath = m.repositoryRelativePath ?? m.relativePath ?? m.path;
-          if (!definitionPathFilter(filterRelativePath)) {
-            return;
-          }
-          const relativePath = m.relativePath ?? filterRelativePath;
-          const cacheKey = m.uri ?? m.path;
-          this.resultStore.addMatch(cacheKey, m.path, relativePath, m);
-          this.session.recordMatch();
-          if (!firstResultLogged) {
-            firstResultLogged = true;
-            this.logger.log(`def-search#${token} first result elapsed=${Date.now() - startedAt} ms`);
-            this.session.startProgress('content');
-          }
-          this.session.scheduleResultPush('content');
+        // tags 缺失时重建索引，然后对新建的索引执行一次纯扫描。
+        const tagsDir = posixPath.dirname(tagsPath);
+        const tagsBase = posixPath.basename(tagsPath);
+        this.logger.log(`def-search#${token} searching tags after rebuild query="${query}" in ${tagsBase}`);
+        this.session.postPhase('Searching tag index...');
+        await this.streamTagSearch(
+          client,
+          buildTagSearchCommand(tagsDir, tagsBase, query),
+          token,
+          query,
+          repository,
+          tagsDir,
+          startedAt,
+          definitionPathFilter
+        );
+        if (!this.session.isCurrent(token)) {
+          return false;
         }
-      });
-      const rg = await this.remoteExecutor.execStreamingWithExitCode(client, rgLine, {
-        trackAsActive: true,
-        collectStdout: false,
-        onStdout: (chunk) => lineBuffer.push(chunk)
-      });
-      if (!firstResultLogged) {
-        this.session.startProgress('content');
-      }
-      await lineBuffer.flush();
-      this.logger.log(`def-search#${token} stream stats=${JSON.stringify(lineBuffer.stats)}`);
-      this.logger.log(`def-search#${token} rg done code=${rg.code} stdoutLines=${totalLines}`);
-      if (!this.session.isCurrent(token)) {
-        return false;
-      }
-      const stderr = filterRipgrepStderr(rg.stderr);
-      if (stderr.ignoredPermissionDeniedCount > 0) {
-        this.logger.log(`def-search#${token} ignored ${stderr.ignoredPermissionDeniedCount} ripgrep permission-denied diagnostics`);
-      }
-      if (rg.code === 141) {
-        this.logger.log(`def-search#${token} ignored ripgrep code=141 after stream close`);
-        this.session.flushResults();
-        if (!finalize) {
-          return true;
-        }
-        this.session.stopProgress();
-        const elapsedMs = Date.now() - startedAt;
-        const total = this.resultStore.totalMatches();
-        const summary = total === 0
-          ? (await this.translationService.translate('def_no_results')) + ` (${elapsedMs} ms)`
-          : `${this.resultStore.size} files, ${total} results (${elapsedMs} ms)`;
-        this.session.postState({ type: 'state', running: false, summary, elapsedMs, ctagsInProgress: false });
-        return true;
-      }
-      if (isIgnorableRipgrepFailure(rg.code, rg.stderr)) {
-        this.logger.log(`def-search#${token} ignored ripgrep code=${rg.code} with permission-denied diagnostics only`);
-      } else if (rg.code !== 0 && rg.code !== 1) {
-        throw new Error((stderr.visibleStderr && stderr.visibleStderr.slice(0, 300)) || `ripgrep exited with code ${String(rg.code)}`);
       }
 
       this.session.flushResults();
@@ -275,23 +237,86 @@ export class DefinitionSearch {
   }
 
   /**
-   * 执行合并远端探针：一次 exec 返回 git 根、工作树状态、rg/ctags 版本、
-   * tags 是否存在与 git HEAD，减少定义搜索的串行往返次数。
+   * 流式执行 tags 搜索命令并增量写入结果存储。command 可以是“探针+扫描”合并命令
+   * 或重建后的纯扫描命令；tagsDir 在合并命令场景是惰性取值的 git 根（探针解析后才有）。
+   * 搜索命令不设墙钟超时：长索引扫描由用户切换/取消来终止。
    */
-  private async runTagProbe(client: Client, remoteCwd: string, token: number): Promise<TagProbeResult | undefined> {
-    const command = buildTagProbeCommand(
-      remoteCwd,
-      this.remoteToolInstaller.remoteRgPath,
-      this.remoteToolInstaller.remoteCtagsPath
-    );
-    const r = await this.remoteExecutor.execWithExitCode(client, command);
+  private async streamTagSearch(
+    client: Client,
+    command: string,
+    token: number,
+    query: string,
+    repository: ResolvedSearchRepository,
+    tagsDir: string | (() => string),
+    startedAt: number,
+    definitionPathFilter: (relativePath: string) => boolean,
+    onProbeLine?: (line: string) => void
+  ): Promise<void> {
+    let totalLines = 0;
+    let firstResultLogged = false;
+    const lineBuffer = new StreamingLineProcessor({
+      shouldContinue: () => this.session.isCurrent(token),
+      onLine: (line) => {
+        if (!this.session.isCurrent(token)) {
+          return;
+        }
+        if (onProbeLine && line.startsWith(TAG_PROBE_PREFIX)) {
+          onProbeLine(line);
+          return;
+        }
+        totalLines += 1;
+        const resolvedTagsDir = typeof tagsDir === 'function' ? tagsDir() : tagsDir;
+        if (!resolvedTagsDir) {
+          return;
+        }
+        const m = this.parseTagResultLine(line, query, repository, resolvedTagsDir);
+        if (!m) {
+          return;
+        }
+        const filterRelativePath = m.repositoryRelativePath ?? m.relativePath ?? m.path;
+        if (!definitionPathFilter(filterRelativePath)) {
+          return;
+        }
+        const relativePath = m.relativePath ?? filterRelativePath;
+        const cacheKey = m.uri ?? m.path;
+        this.resultStore.addMatch(cacheKey, m.path, relativePath, m);
+        this.session.recordMatch();
+        if (!firstResultLogged) {
+          firstResultLogged = true;
+          this.logger.log(`def-search#${token} first result elapsed=${Date.now() - startedAt} ms`);
+          this.session.startProgress('content');
+        }
+        this.session.scheduleResultPush('content');
+      }
+    });
+    const rg = await this.remoteExecutor.execStreamingWithExitCode(client, command, {
+      trackAsActive: true,
+      collectStdout: false,
+      timeoutMs: 0,
+      onStdout: (chunk) => lineBuffer.push(chunk)
+    });
+    if (!firstResultLogged) {
+      this.session.startProgress('content');
+    }
+    await lineBuffer.flush();
+    this.logger.log(`def-search#${token} stream stats=${JSON.stringify(lineBuffer.stats)}`);
+    this.logger.log(`def-search#${token} rg done code=${rg.code} stdoutLines=${totalLines}`);
     if (!this.session.isCurrent(token)) {
-      return undefined;
+      return;
     }
-    if (r.code !== 0 && r.code !== undefined) {
-      throw new Error(r.stderr.trim() || r.stdout.trim() || `Remote probe failed with exit code ${r.code}.`);
+    const stderr = filterRipgrepStderr(rg.stderr);
+    if (stderr.ignoredPermissionDeniedCount > 0) {
+      this.logger.log(`def-search#${token} ignored ${stderr.ignoredPermissionDeniedCount} ripgrep permission-denied diagnostics`);
     }
-    return parseTagProbe(r.stdout);
+    if (rg.code === 141) {
+      this.logger.log(`def-search#${token} ignored ripgrep code=141 after stream close`);
+      return;
+    }
+    if (isIgnorableRipgrepFailure(rg.code, rg.stderr)) {
+      this.logger.log(`def-search#${token} ignored ripgrep code=${rg.code} with permission-denied diagnostics only`);
+    } else if (rg.code !== 0 && rg.code !== 1) {
+      throw new Error((stderr.visibleStderr && stderr.visibleStderr.slice(0, 300)) || `ripgrep exited with code ${String(rg.code)}`);
+    }
   }
 
   private async runRemoteCtagsBuild(

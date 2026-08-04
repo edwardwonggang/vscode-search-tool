@@ -27,6 +27,9 @@ export type RemoteToolInstallerOptions = {
 
 export class RemoteToolInstaller {
   private remoteRgInstallPromise?: Promise<string>;
+  // 已确认远端 rg 存在的打包签名；签名不变时跳过每次搜索前的 --version 往返。
+  // 远端 /tmp 被清理导致 rg 丢失时，由搜索执行层在 spawn 失败后调用 invalidateRg() 触发静默重传。
+  private confirmedRgSignature?: string;
 
   constructor(private readonly options: RemoteToolInstallerOptions) {}
 
@@ -40,6 +43,7 @@ export class RemoteToolInstaller {
 
   public clearCache(): void {
     this.remoteRgInstallPromise = undefined;
+    this.confirmedRgSignature = undefined;
   }
 
   public async ensureRg(client: Client, knownVersion?: string): Promise<string> {
@@ -52,8 +56,13 @@ export class RemoteToolInstaller {
       this.options.logger.debug(`remote rg already present: ${knownVersion}`);
       return remoteRgPath;
     }
+    if (this.confirmedRgSignature === bundledSignature) {
+      this.options.logger.debug('remote rg already present (cached confirmation)');
+      return remoteRgPath;
+    }
     const existingVersion = await this.getRemoteExecutableVersion(client, remoteRgPath);
     if (existingVersion) {
+      this.confirmedRgSignature = bundledSignature;
       this.options.logger.debug(`remote rg already present: ${existingVersion}`);
       return remoteRgPath;
     }
@@ -70,6 +79,11 @@ export class RemoteToolInstaller {
         this.remoteRgInstallPromise = undefined;
       }
     }
+  }
+
+  /** 标记远端 rg 确认缓存失效：远端 /tmp 被清理等场景下，下一次 ensureRg 会重新检查并静默重传。 */
+  public invalidateRg(): void {
+    this.confirmedRgSignature = undefined;
   }
 
   public async ensureCtags(client: Client, missingMessage: string, knownVersion?: string): Promise<string> {
@@ -127,6 +141,7 @@ export class RemoteToolInstaller {
     this.options.logger.log('sftp upload finished');
     this.options.logger.log('setting executable bit on remote rg');
     await this.options.executor.exec(client, buildChmodExecutableCommand(remoteRgPath));
+    this.confirmedRgSignature = bundledSignature;
     this.options.logger.log('remote rg ready');
     return remoteRgPath;
   }
