@@ -23,6 +23,8 @@ export type RemoteToolInstallerOptions = {
   remoteRgPath: string;
   bundledCtagsRelativePath: string;
   remoteCtagsPath: string;
+  bundledFgrRelativePath: string;
+  remoteFgrPath: string;
 };
 
 export class RemoteToolInstaller {
@@ -30,6 +32,8 @@ export class RemoteToolInstaller {
   // 已确认远端 rg 存在的打包签名；签名不变时跳过每次搜索前的 --version 往返。
   // 远端 /tmp 被清理导致 rg 丢失时，由搜索执行层在 spawn 失败后调用 invalidateRg() 触发静默重传。
   private confirmedRgSignature?: string;
+  private fgrInstallPromise?: Promise<string>;
+  private confirmedFgrSignature?: string;
 
   constructor(private readonly options: RemoteToolInstallerOptions) {}
 
@@ -41,9 +45,15 @@ export class RemoteToolInstaller {
     return this.options.remoteCtagsPath;
   }
 
+  public get remoteFgrPath(): string {
+    return this.options.remoteFgrPath;
+  }
+
   public clearCache(): void {
     this.remoteRgInstallPromise = undefined;
     this.confirmedRgSignature = undefined;
+    this.fgrInstallPromise = undefined;
+    this.confirmedFgrSignature = undefined;
   }
 
   public async ensureRg(client: Client, knownVersion?: string): Promise<string> {
@@ -84,6 +94,51 @@ export class RemoteToolInstaller {
   /** 标记远端 rg 确认缓存失效：远端 /tmp 被清理等场景下，下一次 ensureRg 会重新检查并静默重传。 */
   public invalidateRg(): void {
     this.confirmedRgSignature = undefined;
+  }
+
+  /**
+   * 确保远端存在 fgr（fast-grep）。有打包二进制时上传到远端固定路径并缓存确认；
+   * 无打包二进制时回退到远端 PATH 中的 fgr。
+   */
+  public async ensureFgr(client: Client): Promise<string> {
+    const remoteFgrPath = this.options.remoteFgrPath;
+    const localFgrPath = this.options.asAbsolutePath(this.options.bundledFgrRelativePath);
+    const localFgrStat = await fs.stat(localFgrPath).catch(() => undefined);
+    if (!localFgrStat) {
+      const found = await this.findFgrOnPath(client);
+      if (found) {
+        this.options.logger.debug(`remote fgr already present on PATH: ${found}`);
+        return found;
+      }
+      throw new Error('Indexed search requires a bundled fgr binary or fgr on the remote PATH.');
+    }
+    const bundledSignature = `${remoteFgrPath}|${localFgrStat.size}|${localFgrStat.mtimeMs}`;
+    if (this.confirmedFgrSignature === bundledSignature) {
+      this.options.logger.debug('remote fgr already present (cached confirmation)');
+      return remoteFgrPath;
+    }
+    const existingVersion = await this.getRemoteExecutableVersion(client, remoteFgrPath);
+    if (existingVersion) {
+      this.confirmedFgrSignature = bundledSignature;
+      this.options.logger.debug(`remote fgr already present: ${existingVersion}`);
+      return remoteFgrPath;
+    }
+    if (this.fgrInstallPromise) {
+      return await this.fgrInstallPromise;
+    }
+    const installPromise = this.installExecutable(client, localFgrPath, remoteFgrPath, bundledSignature, 'fgr');
+    this.fgrInstallPromise = installPromise;
+    try {
+      return await installPromise;
+    } finally {
+      if (this.fgrInstallPromise === installPromise) {
+        this.fgrInstallPromise = undefined;
+      }
+    }
+  }
+
+  public invalidateFgr(): void {
+    this.confirmedFgrSignature = undefined;
   }
 
   public async ensureCtags(client: Client, missingMessage: string, knownVersion?: string): Promise<string> {
@@ -133,17 +188,39 @@ export class RemoteToolInstaller {
     remoteRgPath: string,
     bundledSignature: string
   ): Promise<string> {
-    this.options.logger.debug(`installing bundled rg ${bundledSignature} from ${localRgPath}`);
-    this.options.logger.log(`creating remote directory for rg: ${posixPath.dirname(remoteRgPath)}`);
-    await this.options.executor.exec(client, buildMkdirCommand(posixPath.dirname(remoteRgPath)));
+    return await this.installExecutable(client, localRgPath, remoteRgPath, bundledSignature, 'rg');
+  }
+
+  private async installExecutable(
+    client: Client,
+    localPath: string,
+    remotePath: string,
+    bundledSignature: string,
+    toolName: string
+  ): Promise<string> {
+    this.options.logger.debug(`installing bundled ${toolName} ${bundledSignature} from ${localPath}`);
+    this.options.logger.log(`creating remote directory for ${toolName}: ${posixPath.dirname(remotePath)}`);
+    await this.options.executor.exec(client, buildMkdirCommand(posixPath.dirname(remotePath)));
     this.options.logger.log('opening sftp session');
-    await this.uploadFile(client, localRgPath, remoteRgPath);
+    await this.uploadFile(client, localPath, remotePath);
     this.options.logger.log('sftp upload finished');
-    this.options.logger.log('setting executable bit on remote rg');
-    await this.options.executor.exec(client, buildChmodExecutableCommand(remoteRgPath));
-    this.confirmedRgSignature = bundledSignature;
-    this.options.logger.log('remote rg ready');
-    return remoteRgPath;
+    this.options.logger.log(`setting executable bit on remote ${toolName}`);
+    await this.options.executor.exec(client, buildChmodExecutableCommand(remotePath));
+    if (toolName === 'rg') {
+      this.confirmedRgSignature = bundledSignature;
+    } else {
+      this.confirmedFgrSignature = bundledSignature;
+    }
+    this.options.logger.log(`remote ${toolName} ready`);
+    return remotePath;
+  }
+
+  private async findFgrOnPath(client: Client): Promise<string> {
+    const r = await this.options.executor.execWithExitCode(
+      client,
+      'command -v fgr 2>/dev/null || true'
+    );
+    return r.stdout.split(/\r?\n/u)[0]?.trim() ?? '';
   }
 
   private async getRemoteExecutableVersion(client: Client, remotePath: string): Promise<string | undefined> {
