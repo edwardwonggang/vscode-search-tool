@@ -82,8 +82,9 @@ test('buildBoundedTagSearchCommand escapes BRE metacharacters in queries', () =>
 test('buildTagSearchCommand prefers readtags binary search and falls back to bounded grep', () => {
   const cmd = buildTagSearchCommand('/repo', 'tags', 'BMU_NUM');
   assert.ok(cmd.includes("cd '/repo'"));
-  assert.ok(cmd.includes("if command -v readtags >/dev/null 2>&1; then"));
-  assert.ok(cmd.includes("readtags -E -ne -t '/repo/tags' - 'BMU_NUM' 2>/dev/null || {"));
+  assert.ok(cmd.includes("if command -v readtags >/dev/null 2>&1 && readtags --help 2>&1 | grep -q -e '--extension-fields'; then"));
+  assert.ok(cmd.includes("out=$(readtags -E -ne -t '/repo/tags' - 'BMU_NUM' 2>/dev/null) || out=\"\""));
+  assert.ok(cmd.includes("printf '%s\\n' \"$out\""));
   assert.ok(cmd.includes("grep -n -m1 '^BMU_NUM[[:space:]]' '/repo/tags'"));
   assert.ok(cmd.includes("awk -F '\\t' -v n='BMU_NUM'"));
   assert.ok(!cmd.includes(' rg '));
@@ -94,7 +95,8 @@ test('buildTagProbeAndSearchCommand fuses probe with readtags-first scan in one 
   assert.ok(cmd.includes("cd '/home/u/proj'"));
   assert.ok(cmd.includes('PROBE:gitTop=%s'));
   assert.ok(cmd.includes('if test "$tags" = y && test -n "$top"; then'));
-  assert.ok(cmd.includes('readtags -E -ne -t "$top/tags" - \'BMU_NUM\' 2>/dev/null || {'));
+  assert.ok(cmd.includes("readtags --help 2>&1 | grep -q -e '--extension-fields'"));
+  assert.ok(cmd.includes("out=$(readtags -E -ne -t \"$top/tags\" - 'BMU_NUM' 2>/dev/null) || out=\"\""));
   assert.ok(cmd.includes("grep -n -m1 '^BMU_NUM[[:space:]]' \"$top/tags\""));
   assert.ok(!cmd.includes(' rg '));
 });

@@ -817,6 +817,7 @@ test('tag index metadata and rebuild command use tmp file then atomic replace', 
   assert.equal(parseTagIndexMeta(JSON.stringify(meta))?.gitHead, 'abc');
   assert.equal(command.includes("-f '/home/alice/repo/tags.tmp'"), true);
   assert.equal(command.includes("mv -f '/home/alice/repo/tags.tmp' '/home/alice/repo/tags'"), true);
+  assert.equal(command.includes('--sort=yes'), true);
   assert.equal(command.includes("--exclude='tags'"), true);
   assert.equal(command.includes("--exclude='tags.tmp'"), true);
   assert.equal(command.includes("--exclude='node_modules'"), true);

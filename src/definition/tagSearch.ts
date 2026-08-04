@@ -46,10 +46,15 @@ function buildTagScanBlock(tagsPathArg: string, query: string): string {
     `fi`
   ];
   return [
-    `if command -v readtags >/dev/null 2>&1; then`,
-    `  readtags -E -ne -t ${tagsPathArg} - ${escapedQuery} 2>/dev/null || {`,
+    // 远端 readtags 版本/行为差异会导致静默无输出：只有确认支持所需的
+    // --extension-fields 参数才使用二分查找，空输出或命令失败一律回退 grep。
+    `if command -v readtags >/dev/null 2>&1 && readtags --help 2>&1 | grep -q -e '--extension-fields'; then`,
+    `  out=$(readtags -E -ne -t ${tagsPathArg} - ${escapedQuery} 2>/dev/null) || out=""`,
+    `  if test -n "$out"; then`,
+    `    printf '%s\\n' "$out"`,
+    `  else`,
     ...grepFallback.map((line) => `    ${line}`),
-    `  }`,
+    `  fi`,
     `else`,
     ...grepFallback.map((line) => `  ${line}`),
     `fi`
