@@ -17,8 +17,6 @@ export type SearchStateMessage = {
   fileCount?: number;
   matchCount?: number;
   ctagsInProgress?: boolean;
-  // 阶段提示（如“Building search index...”）：前端应把它显示出来，避免被进度计时器覆盖。
-  phase?: boolean;
 };
 
 export type SearchResultSnapshot = {
@@ -176,7 +174,6 @@ export class SearchSession {
       type: 'state',
       running: true,
       summary,
-      phase: true,
       elapsedMs: this.elapsedMs,
       fileCount: this.resultStore.size,
       matchCount: this.resultStore.totalMatches()

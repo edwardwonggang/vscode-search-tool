@@ -66,7 +66,6 @@
   let currentRemotePath = '';
   let lastSearchSummaryText = '';
   let lastRenderTimingInfo = null;
-  let lastPhaseText = '';
   let nextSearchRequestId = Number.isFinite(vscodeState.nextSearchRequestId) ? vscodeState.nextSearchRequestId : 1;
   let activeSearchRequestId = Number.isFinite(vscodeState.activeSearchRequestId) ? vscodeState.activeSearchRequestId : 0;
   const collapsedFiles = new Set(Array.isArray(vscodeState.collapsedFiles) ? vscodeState.collapsedFiles : []);
@@ -564,7 +563,6 @@
   function prepareSearchUi(requestId, mode) {
     lastSearchSummaryText = '';
     lastRenderTimingInfo = null;
-    lastPhaseText = '';
     progressInfo = {
       requestId,
       mode,
@@ -595,10 +593,6 @@
       return;
     }
     const elapsedMs = Math.max(0, Date.now() - progressInfo.startedAt);
-    if (lastPhaseText) {
-      summaryTextEl.textContent = `${lastPhaseText} (${elapsedMs} ms)`;
-      return;
-    }
     if (progressInfo.mode === 'file') {
       summaryTextEl.textContent = `${progressInfo.fileCount} files (${elapsedMs} ms)`;
     } else {
@@ -902,11 +896,6 @@
         return;
       }
       summaryTextEl.textContent = statePayload.error || statePayload.summary || '';
-      if (statePayload.phase) {
-        lastPhaseText = statePayload.summary || '';
-      } else if (!statePayload.running || statePayload.error) {
-        lastPhaseText = '';
-      }
       if (statePayload.running || statePayload.error) {
         lastSearchSummaryText = '';
         lastRenderTimingInfo = null;
