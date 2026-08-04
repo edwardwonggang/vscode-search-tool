@@ -12,7 +12,6 @@
     "src/definition/definitionLocations.ts",
     "src/definition/tagProbe.ts",
     "src/definition/tagSearch.ts",
-    "src/index/**/*.ts",
     "tests/**/*.ts"
   ]
 }

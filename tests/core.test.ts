@@ -579,9 +579,7 @@ test('RemoteToolInstaller caches confirmed remote rg and reuploads after invalid
     bundledRgRelativePath: 'assets/bin/rg',
     remoteRgPath: '/tmp/ripgreptool-rg',
     bundledCtagsRelativePath: 'assets/bin/ctags',
-    remoteCtagsPath: '/tmp/ripgreptool-ctags',
-    bundledFgrRelativePath: 'assets/bin/fgr',
-    remoteFgrPath: '/tmp/ripgreptool-fgr'
+    remoteCtagsPath: '/tmp/ripgreptool-ctags'
   });
 
   try {

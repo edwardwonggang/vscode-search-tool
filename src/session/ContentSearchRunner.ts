@@ -12,29 +12,17 @@ import { ContentSearchProcessor } from './ContentSearchProcessor';
 import { buildContentSearchArgs } from './rgArgs';
 import { buildRemoteCommand } from '../remote/commands';
 import { createResultPathFilter } from '../core/glob';
-import { getRelativeRemotePath } from '../core/paths';
 import type { SearchSession } from './SearchSession';
 import type { WebviewMessageRouter } from '../search/WebviewMessageRouter';
 import type { ConnectionController } from './ConnectionController';
 import { StreamingLineProcessor } from '../search/StreamingLineProcessor';
 import { filterRipgrepStderr, isIgnorableRipgrepFailure, isRemoteExecutableMissing } from './rgDiagnostics';
-import { planFgrContentSearch } from '../index/fgrArgs';
-import { FgrContentProcessor } from '../index/FgrContentProcessor';
-import {
-  buildFgrIndexCommand,
-  buildFgrIndexExistsCommand,
-  buildFgrSearchCommand,
-  buildFgrStatsCommand,
-  buildFgrUpdateCommand,
-  getFgrIndexDir
-} from '../index/fgrCommands';
 
 export type ContentSearchConfig = {
   contextLines: number;
   threads: number;
   resultRefreshMs: number;
   definitionExcludeGlobs: string[];
-  indexedContentSearch: boolean;
 };
 
 export class ContentSearchRunner {
@@ -59,22 +47,6 @@ export class ContentSearchRunner {
     searchStartedAt = Date.now()
   ): Promise<boolean> {
     const startedAt = searchStartedAt;
-    if (this.config.indexedContentSearch) {
-      const fgrPlan = planFgrContentSearch(options, settings, this.config.contextLines);
-      if (fgrPlan.usable) {
-        return await this.executeIndexedSearch(
-          token,
-          options,
-          settings,
-          repository,
-          messageRouter,
-          finalize,
-          startedAt,
-          fgrPlan.args
-        );
-      }
-      this.logger.log(`search#${token} fgr plan falls back to rg: ${fgrPlan.reason}`);
-    }
     let totalMatches = 0;
     const remoteCwd = repository.remoteCwd;
     const args = buildContentSearchArgs(options, settings, {
@@ -206,170 +178,6 @@ export class ContentSearchRunner {
 
   private createTarget(repository: ResolvedSearchRepository, remoteRelativePath: string) {
     return this.workspaceResolver.createWorkspaceTarget(repository, remoteRelativePath);
-  }
-
-  /** fgr 输出的是远端绝对路径，先转为相对搜索根，再映射回工作区 URI。 */
-  private createTargetFromRemotePath(repository: ResolvedSearchRepository, remoteAbsolutePath: string) {
-    const relativePath = getRelativeRemotePath(remoteAbsolutePath, repository.remoteCwd);
-    if (relativePath === undefined) {
-      this.logger.debug(`fgr result outside workspace root: ${remoteAbsolutePath}`);
-      return {
-        uriString: '',
-        legacyPath: '',
-        relativePath: '',
-        repositoryRelativePath: undefined
-      };
-    }
-    return this.workspaceResolver.createWorkspaceTarget(repository, relativePath);
-  }
-
-  /** 索引模式内容搜索：确保 fgr 与索引就绪后，流式解析 path:line:content 输出。 */
-  private async executeIndexedSearch(
-    token: number,
-    options: SearchOptions,
-    settings: SearchSettings,
-    repository: ResolvedSearchRepository,
-    messageRouter: WebviewMessageRouter,
-    finalize: boolean,
-    startedAt: number,
-    fgrArgs: string[]
-  ): Promise<boolean> {
-    const remoteCwd = repository.remoteCwd;
-    const resultPathFilter = createResultPathFilter(options, settings);
-    const query = options.query;
-    this.logger.log(`search#${token} mode=indexed query="${query}" cwd="${remoteCwd}"`);
-    this.logger.log(`search#${token} requestId=${options.requestId ?? 'none'} trigger=${options.triggerSource ?? 'unknown'}`);
-    this.session.postPhase('Connecting to SSH...');
-
-    try {
-      const client = await this.connectionController.getOrCreateClient(settings);
-      if (!this.session.isCurrent(token)) {
-        return false;
-      }
-      this.session.postPhase('Checking remote fast-grep...');
-      const fgrPath = await this.remoteToolInstaller.ensureFgr(client);
-      if (!this.session.isCurrent(token)) {
-        return false;
-      }
-      await this.ensureFgrIndex(client, token, remoteCwd);
-      if (!this.session.isCurrent(token)) {
-        return false;
-      }
-
-      const command = buildFgrSearchCommand(
-        fgrPath,
-        remoteCwd,
-        getFgrIndexDir(remoteCwd),
-        fgrArgs,
-        query
-      );
-      this.logger.debug(`search#${token} fgr command=${command}`);
-      this.session.postPhase('Searching index...');
-      let firstResultLogged = false;
-      let parsedLines = 0;
-      const lineBuffer = new StreamingLineProcessor({
-        shouldContinue: () => this.session.isCurrent(token),
-        onLine: (line) => {
-          if (!this.session.isCurrent(token)) {
-            return;
-          }
-          parsedLines += 1;
-          const addedMatches = FgrContentProcessor.processLine(
-            line,
-            query,
-            options.caseSensitive,
-            resultPathFilter,
-            (remoteAbsolutePath) => this.createTargetFromRemotePath(repository, remoteAbsolutePath),
-            this.resultStore
-          );
-          if (addedMatches > 0) {
-            this.session.recordMatch();
-            if (!firstResultLogged) {
-              firstResultLogged = true;
-              this.logger.log(`search#${token} first result elapsed=${Date.now() - startedAt} ms`);
-              this.session.startProgress('content');
-            }
-            this.session.scheduleResultPush('content');
-          }
-        }
-      });
-      const result = await this.remoteExecutor.execStreamingWithExitCode(client, command, {
-        trackAsActive: true,
-        collectStdout: false,
-        timeoutMs: 0,
-        onStdout: (chunk) => lineBuffer.push(chunk)
-      });
-      if (!firstResultLogged) {
-        this.session.startProgress('content');
-      }
-      await lineBuffer.flush();
-      this.logger.log(`search#${token} fgr lines=${parsedLines} stats=${JSON.stringify(lineBuffer.stats)} code=${result.code}`);
-      if (!this.session.isCurrent(token)) {
-        return false;
-      }
-
-      const stderr = result.stderr.trim();
-      if (result.code !== 0 && result.code !== 141 && result.code !== undefined) {
-        this.logger.log(`search#${token} fgr failed code=${result.code} stderr=${stderr.slice(0, 300)}`);
-        this.session.stopProgress();
-        this.session.postState({
-          type: 'state',
-          running: false,
-          error: stderr.slice(0, 300) || `fast-grep exited with code ${String(result.code)}.`
-        });
-        return false;
-      }
-
-      this.session.flushResults();
-      if (!finalize) {
-        return true;
-      }
-      this.session.stopProgress();
-      const elapsedMs = Date.now() - startedAt;
-      const summary = this.buildSummary(elapsedMs, this.resultStore.totalMatches());
-      this.session.postState({ type: 'state', running: false, summary, elapsedMs });
-      return true;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger.log(`search#${token} fgr exception: ${message}`);
-      if (this.session.isCurrent(token)) {
-        this.session.stopProgress();
-        this.session.postState({ type: 'state', running: false, error: message });
-      }
-      return false;
-    }
-  }
-
-  /** 确保远端索引存在：缺失时全量构建，存在时增量刷新；构建/刷新不设墙钟超时。 */
-  private async ensureFgrIndex(client: Client, token: number, remoteCwd: string): Promise<void> {
-    const indexDir = getFgrIndexDir(remoteCwd);
-    const existsResult = await this.remoteExecutor.execWithExitCode(client, buildFgrIndexExistsCommand(indexDir));
-    const exists = existsResult.stdout.trim() === 'y';
-    if (exists) {
-      this.session.postPhase('Refreshing search index...');
-      this.logger.log(`search#${token} fgr incremental update`);
-      const updateResult = await this.remoteExecutor.execStreamingWithExitCode(
-        client,
-        buildFgrUpdateCommand(this.remoteToolInstaller.remoteFgrPath, remoteCwd),
-        { trackAsActive: true, collectStdout: false, timeoutMs: 0 }
-      );
-      this.logger.log(`search#${token} fgr update code=${updateResult.code}`);
-    } else {
-      this.session.postPhase('Building search index (first search may take a while)...');
-      this.logger.log(`search#${token} fgr full index build`);
-      const buildResult = await this.remoteExecutor.execStreamingWithExitCode(
-        client,
-        buildFgrIndexCommand(this.remoteToolInstaller.remoteFgrPath, remoteCwd),
-        { trackAsActive: true, collectStdout: false, timeoutMs: 0 }
-      );
-      const stderrTail = buildResult.stderr.trim().slice(-500);
-      this.logger.log(`search#${token} fgr build code=${buildResult.code} stderr=${stderrTail}`);
-      const stats = await this.remoteExecutor.execWithExitCode(
-        client,
-        buildFgrStatsCommand(this.remoteToolInstaller.remoteFgrPath, indexDir)
-      );
-      this.logger.log(`search#${token} fgr index stats: ${stats.stdout.trim().slice(0, 500)}`);
-    }
   }
 
   private async runSearchCommand(
