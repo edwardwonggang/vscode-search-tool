@@ -17,7 +17,9 @@ import { TagIndexAutoRefresh } from '../definition/TagIndexAutoRefresh';
 
 const DEFAULT_REMOTE_RG_PATH = '/tmp/ripgreptool-rg';
 const DEFAULT_REMOTE_CTAGS_PATH = '/tmp/ripgreptool-ctags';
+const DEFAULT_REMOTE_FGR_PATH = '/tmp/ripgreptool-fgr';
 const BUNDLED_CTAGS_RELATIVE_PATH = 'assets/bin/ctags';
+const BUNDLED_FGR_RELATIVE_PATH = 'assets/bin/fgr';
 const SEARCH_VIEW_I18N_RELATIVE_PATH = 'media/i18n/search-view.csv';
 
 export type Services = {
@@ -67,7 +69,9 @@ export function createServices(context: ExtensionContext): Services {
     bundledRgRelativePath: bundledLinuxRgPath(),
     remoteRgPath: DEFAULT_REMOTE_RG_PATH,
     bundledCtagsRelativePath: BUNDLED_CTAGS_RELATIVE_PATH,
-    remoteCtagsPath: DEFAULT_REMOTE_CTAGS_PATH
+    remoteCtagsPath: DEFAULT_REMOTE_CTAGS_PATH,
+    bundledFgrRelativePath: BUNDLED_FGR_RELATIVE_PATH,
+    remoteFgrPath: DEFAULT_REMOTE_FGR_PATH
   });
 
   const connectionController = new ConnectionController(
@@ -95,7 +99,8 @@ export function createServices(context: ExtensionContext): Services {
       contextLines: Math.max(0, config.get<number>('contextLines', 0)),
       threads: Math.max(0, config.get<number>('threads', 0)),
       resultRefreshMs,
-      definitionExcludeGlobs
+      definitionExcludeGlobs,
+      indexedContentSearch: config.get<boolean>('indexedContentSearch', false)
     },
     {
       resultRefreshMs

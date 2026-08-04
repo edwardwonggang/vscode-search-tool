@@ -28,8 +28,16 @@ Heavy searches can be slow or memory-heavy because the extension no longer appli
 | ripgrepTool.threads | 0 = auto, else rg --threads. |
 | ripgrepTool.resultRefreshMs | UI batching while streaming. |
 | ripgrepTool.verboseLogging | Extra diagnostics. Default is false; enable it only when troubleshooting. |
+| ripgrepTool.indexedContentSearch | Experimental: run content search through the fast-grep n-gram index (fgr) instead of a full ripgrep scan. Default is false. |
 
 The modal Settings in the view configures SSH and globs; numeric ripgrepTool.* options are edited in User/Workspace JSON settings or the Settings UI when the schema is listed.
+
+## Experimental Indexed Content Search
+
+- Enable `ripgrepTool.indexedContentSearch` to route content search through the fast-grep n-gram index. The first search builds `~/.fgr` under the remote search root (can be slow and uses extra disk); later searches refresh the index incrementally before running.
+- Whole-word queries and searches with context lines (`ripgrepTool.contextLines > 0`) automatically fall back to ripgrep, because fast-grep does not support those semantics.
+- fast-grep 0.3.1 output is `path:line:content` (no JSON, no column numbers), so match columns are approximated by locating the query text in the line; this is a test-stage trade-off.
+- Measure before adopting: index size, build time, and CPU/IO on the target remote repo. See the search log (`Ripgrep Tool` output channel) for `fgr build code=...`, `fgr index stats: ...`, and `first result elapsed=...` entries.
 
 ## Workspace Path Rules
 
