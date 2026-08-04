@@ -2,7 +2,7 @@
   "name": "ripgreptool",
   "displayName": "Ripgrep Tool",
   "description": "Remote ripgrep search in the sidebar. Limits and setup are in the README (extension details), not in the in-editor UI.",
-  "version": "0.0.87",
+  "version": "0.0.86",
   "publisher": "local",
   "license": "UNLICENSED",
   "extensionKind": [
@@ -100,11 +100,6 @@
             "**/unittest/**"
           ],
           "description": "Default exclude globs applied to definition search results, including the right-click Go to Definition command."
-        },
-        "ripgrepTool.indexedContentSearch": {
-          "type": "boolean",
-          "default": false,
-          "description": "Experimental: run content search through the fast-grep n-gram index instead of a full ripgrep scan. The first search builds the index on the remote; later searches refresh it incrementally. Whole-word queries and context lines fall back to ripgrep. Requires extra remote disk space for the index."
         }
       }
     }
@@ -114,7 +109,7 @@
     "package": "npm run build && npx @vscode/vsce package --no-dependencies --allow-missing-repository",
     "context": "C:\\Users\\10297441.WIN-9DOP5T7GHM7\\.codex\\tools\\context-pack\\context-pack.cmd",
     "context:changed": "C:\\Users\\10297441.WIN-9DOP5T7GHM7\\.codex\\tools\\context-pack\\context-pack.cmd --changed",
-    "test": "tsc -p tsconfig.test.json && node --test out-test/tests/core.test.js out-test/tests/definition.test.js out-test/tests/fgr.test.js",
+    "test": "tsc -p tsconfig.test.json && node --test out-test/tests/core.test.js out-test/tests/definition.test.js",
     "update": "node scripts/update-extension.mjs",
     "git:register": "node scripts/local-git-register.mjs",
     "git:web": "node scripts/local-git-web.mjs",
