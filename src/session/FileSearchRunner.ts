@@ -2,7 +2,9 @@ import * as vscode from 'vscode';
 import type { SearchOptions, SearchSettings } from '../core/types';
 import type { SearchResultStore } from '../search/SearchResultStore';
 import type { RemoteExecutor } from '../remote/RemoteExecutor';
+import type { RemoteExecResult } from '../remote/RemoteExecutor';
 import type { RemoteToolInstaller } from '../remote/RemoteToolInstaller';
+import type { Client } from 'ssh2';
 import type { ResolvedSearchRepository, WorkspaceResolver } from '../workspace/WorkspaceResolver';
 import type { SessionLogger } from './SessionLogger';
 import { addFileSearchResult } from '../search/FileSearchService';
@@ -13,7 +15,7 @@ import type { SearchSession } from './SearchSession';
 import type { WebviewMessageRouter } from '../search/WebviewMessageRouter';
 import type { ConnectionController } from './ConnectionController';
 import { StreamingLineProcessor } from '../search/StreamingLineProcessor';
-import { filterRipgrepStderr, isIgnorableRipgrepFailure } from './rgDiagnostics';
+import { filterRipgrepStderr, isIgnorableRipgrepFailure, isRemoteExecutableMissing } from './rgDiagnostics';
 
 export type FileSearchConfig = {
   resultRefreshMs: number;
@@ -93,11 +95,8 @@ export class FileSearchRunner {
         }
       });
 
-      const result = await this.remoteExecutor.execStreamingWithExitCode(client, command, {
-        trackAsActive: true,
-        collectStdout: false,
-        onStdout: (chunk) => lineBuffer.push(chunk)
-      });
+      // 远端 rg 丢失时静默重传并重试一次；文件搜索同样不设墙钟超时。
+      const result = await this.runSearchCommand(client, command, lineBuffer, token);
       if (!firstResultLogged) {
         this.session.startProgress('file');
       }
@@ -159,6 +158,35 @@ export class FileSearchRunner {
 
   private createTarget(repository: ResolvedSearchRepository, remoteRelativePath: string) {
     return this.workspaceResolver.createWorkspaceTarget(repository, remoteRelativePath);
+  }
+
+  private async runSearchCommand(
+    client: Client,
+    command: string,
+    lineBuffer: StreamingLineProcessor,
+    token: number
+  ) {
+    const maxAttempts = 2;
+    let lastResult: RemoteExecResult = { stdout: '', stderr: '', code: 127 };
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const result = await this.remoteExecutor.execStreamingWithExitCode(client, command, {
+        trackAsActive: true,
+        collectStdout: false,
+        timeoutMs: 0,
+        onStdout: (chunk) => lineBuffer.push(chunk)
+      });
+      lastResult = result;
+      if (!isRemoteExecutableMissing(result)) {
+        return result;
+      }
+      this.logger.log(`file-search#${token} remote rg missing (attempt ${attempt}); re-uploading silently`);
+      this.remoteToolInstaller.invalidateRg();
+      await this.remoteToolInstaller.ensureRg(client);
+      if (!this.session.isCurrent(token)) {
+        return result;
+      }
+    }
+    return lastResult;
   }
 
   private buildSummary(elapsedMs: number): string {

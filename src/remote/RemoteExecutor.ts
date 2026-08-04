@@ -9,6 +9,7 @@ export type RemoteExecResult = {
 export type RemoteStreamingExecOptions = {
   trackAsActive?: boolean;
   collectStdout?: boolean;
+  // 0 表示不设墙钟超时（长搜索依赖用户切换/取消来关闭通道）；默认 30 秒用于控制类命令。
   timeoutMs?: number;
   onStdout?: (chunk: string) => void;
   onStderr?: (chunk: string) => void;
@@ -26,6 +27,9 @@ export type RemoteExecutorOptions = {
 };
 
 const DEFAULT_REMOTE_EXEC_TIMEOUT_MS = 30000;
+// 流式搜索时 stderr 只保留开头这一段（错误/诊断通常出现在前部），防止海量
+// 诊断信息无限堆积内存；一旦到达上限就不再累积。
+const MAX_STREAMED_STDERR_KEEP_CHARS = 1024 * 1024;
 
 export class RemoteExecutor {
   constructor(private readonly options: RemoteExecutorOptions) {}
@@ -84,28 +88,33 @@ export class RemoteExecutor {
     return await new Promise((resolve, reject) => {
       let settled = false;
       let activeStream: ClientChannel | undefined;
-      const timeoutMs = Math.max(1, execOptions.timeoutMs ?? DEFAULT_REMOTE_EXEC_TIMEOUT_MS);
+      const timeoutMs = execOptions.timeoutMs ?? DEFAULT_REMOTE_EXEC_TIMEOUT_MS;
       const finish = (callback: () => void): void => {
         if (settled) {
           return;
         }
         settled = true;
-        clearTimeout(timeout);
+        if (timeout) {
+          clearTimeout(timeout);
+        }
         callback();
       };
-      const timeout = setTimeout(() => {
-        finish(() => {
-          if (activeStream && execOptions.trackAsActive) {
-            this.options.setActiveChannel?.(undefined, activeStream);
-          }
-          try {
-            activeStream?.close();
-          } catch {
-            // ignore close failures after timeout
-          }
-          reject(new Error(`Remote command timed out after ${timeoutMs} ms.`));
-        });
-      }, timeoutMs);
+      // timeoutMs <= 0 表示无墙钟超时：大结果搜索由用户切换搜索/取消来终止通道。
+      const timeout = timeoutMs > 0
+        ? setTimeout(() => {
+            finish(() => {
+              if (activeStream && execOptions.trackAsActive) {
+                this.options.setActiveChannel?.(undefined, activeStream);
+              }
+              try {
+                activeStream?.close();
+              } catch {
+                // ignore close failures after timeout
+              }
+              reject(new Error(`Remote command timed out after ${timeoutMs} ms.`));
+            });
+          }, timeoutMs)
+        : undefined;
       client.exec(command, (error, stream) => {
         if (error) {
           this.options.logger.log(`remote exec spawn error: ${error.message}`);
@@ -127,7 +136,9 @@ export class RemoteExecutor {
         });
         stream.stderr.on('data', (chunk: Buffer | string) => {
           const text = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk;
-          stderr += text;
+          if (stderr.length < MAX_STREAMED_STDERR_KEEP_CHARS) {
+            stderr = appendBoundedHead(stderr, text, MAX_STREAMED_STDERR_KEEP_CHARS);
+          }
           execOptions.onStderr?.(text);
         });
         stream.on('close', (code: number | undefined | null) => {
@@ -152,4 +163,12 @@ export class RemoteExecutor {
       });
     });
   }
+}
+
+function appendBoundedHead(current: string, addition: string, maxChars: number): string {
+  if (!addition) {
+    return current;
+  }
+  const combined = current + addition;
+  return combined.length <= maxChars ? combined : combined.slice(0, maxChars);
 }

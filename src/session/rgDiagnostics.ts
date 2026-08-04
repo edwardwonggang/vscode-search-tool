@@ -35,3 +35,14 @@ export function isIgnorableRipgrepFailure(code: number | undefined, stderr: stri
   }
   return filterRipgrepStderr(stderr).hasOnlyIgnoredDiagnostics;
 }
+
+/**
+ * 判断远端命令是否因可执行文件缺失而失败（如 /tmp 被重启清理后 rg 丢失）。
+ * shell 对不存在的命令返回 127，并在 stderr 给出 No such file / not found。
+ */
+export function isRemoteExecutableMissing(result: { code?: number; stderr: string }): boolean {
+  if (result.code !== 127) {
+    return false;
+  }
+  return /no such file|command not found|not found/iu.test(result.stderr);
+}

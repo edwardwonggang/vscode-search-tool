@@ -7,6 +7,8 @@ import {
 } from '../src/definition/tagProbe';
 import {
   buildBoundedTagSearchCommand,
+  buildTagProbeAndSearchCommand,
+  buildTagSearchCommand,
   escapeBreString
 } from '../src/definition/tagSearch';
 
@@ -75,6 +77,26 @@ test('buildBoundedTagSearchCommand anchors and bounds the scan', () => {
 test('buildBoundedTagSearchCommand escapes BRE metacharacters in queries', () => {
   const cmd = buildBoundedTagSearchCommand('/repo', 'tags', 'a.b*c');
   assert.ok(cmd.includes("'^a\\.b\\*c[[:space:]]'"));
+});
+
+test('buildTagSearchCommand prefers readtags binary search and falls back to bounded grep', () => {
+  const cmd = buildTagSearchCommand('/repo', 'tags', 'BMU_NUM');
+  assert.ok(cmd.includes("cd '/repo'"));
+  assert.ok(cmd.includes("if command -v readtags >/dev/null 2>&1; then"));
+  assert.ok(cmd.includes("readtags -E -ne -t '/repo/tags' - 'BMU_NUM' 2>/dev/null || {"));
+  assert.ok(cmd.includes("grep -n -m1 '^BMU_NUM[[:space:]]' '/repo/tags'"));
+  assert.ok(cmd.includes("awk -F '\\t' -v n='BMU_NUM'"));
+  assert.ok(!cmd.includes(' rg '));
+});
+
+test('buildTagProbeAndSearchCommand fuses probe with readtags-first scan in one round trip', () => {
+  const cmd = buildTagProbeAndSearchCommand('/home/u/proj', '/tmp/rg', '/tmp/ctags', 'BMU_NUM');
+  assert.ok(cmd.includes("cd '/home/u/proj'"));
+  assert.ok(cmd.includes('PROBE:gitTop=%s'));
+  assert.ok(cmd.includes('if test "$tags" = y && test -n "$top"; then'));
+  assert.ok(cmd.includes('readtags -E -ne -t "$top/tags" - \'BMU_NUM\' 2>/dev/null || {'));
+  assert.ok(cmd.includes("grep -n -m1 '^BMU_NUM[[:space:]]' \"$top/tags\""));
+  assert.ok(!cmd.includes(' rg '));
 });
 
 test('escapeBreString escapes only BRE special characters', () => {
