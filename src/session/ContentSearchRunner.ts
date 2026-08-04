@@ -354,6 +354,9 @@ export class ContentSearchRunner {
         { trackAsActive: true, collectStdout: false, timeoutMs: 0 }
       );
       this.logger.log(`search#${token} fgr update code=${updateResult.code}`);
+      if (updateResult.code !== 0 && updateResult.code !== undefined) {
+        throw new Error(`Index refresh failed: ${updateResult.stderr.trim().slice(0, 300)}`);
+      }
     } else {
       this.session.postPhase('Building search index (first search may take a while)...');
       this.logger.log(`search#${token} fgr full index build`);
@@ -364,6 +367,9 @@ export class ContentSearchRunner {
       );
       const stderrTail = buildResult.stderr.trim().slice(-500);
       this.logger.log(`search#${token} fgr build code=${buildResult.code} stderr=${stderrTail}`);
+      if (buildResult.code !== 0 && buildResult.code !== undefined) {
+        throw new Error(`Index build failed: ${buildResult.stderr.trim().slice(0, 300)}`);
+      }
       const stats = await this.remoteExecutor.execWithExitCode(
         client,
         buildFgrStatsCommand(this.remoteToolInstaller.remoteFgrPath, indexDir)

@@ -54,6 +54,7 @@ export type StatePayload = {
   summary?: string;
   elapsedMs?: number;
   ctagsInProgress?: boolean;
+  phase?: boolean;
 };
 
 export type ConnectionResultPayload = {

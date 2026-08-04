@@ -40,8 +40,8 @@ function baseSettings(overrides: Partial<SearchSettings> = {}): SearchSettings {
 
 test('planFgrContentSearch maps options to fgr args', () => {
   const plan = planFgrContentSearch(
-    baseOptions({ caseSensitive: true, useRegex: true, include: 'src/**', exclude: 'build/' }),
-    baseSettings({ includeGlobs: ['media/**'], excludeGlobs: ['node_modules/**'] }),
+    baseOptions({ caseSensitive: true, useRegex: true }),
+    baseSettings(),
     0
   );
   assert.equal(plan.usable, true);
@@ -50,12 +50,19 @@ test('planFgrContentSearch maps options to fgr args', () => {
     assert.ok(plan.args.includes('--no-ignore'));
     assert.ok(!plan.args.includes('-i'));
     assert.ok(!plan.args.includes('-F'));
-    assert.ok(plan.args.includes('--include'));
-    assert.ok(plan.args.includes('src/**'));
-    assert.ok(plan.args.includes('media/**'));
-    assert.ok(plan.args.includes('--exclude'));
-    assert.ok(plan.args.includes('build/'));
-    assert.ok(plan.args.includes('node_modules/**'));
+  }
+});
+
+test('planFgrContentSearch does not pass include/exclude to fgr (unsupported in 0.3.1)', () => {
+  const plan = planFgrContentSearch(
+    baseOptions({ include: 'src/**', exclude: 'build/' }),
+    baseSettings({ includeGlobs: ['media/**'], excludeGlobs: ['node_modules/**'] }),
+    0
+  );
+  assert.equal(plan.usable, true);
+  if (plan.usable) {
+    assert.ok(!plan.args.includes('--include'));
+    assert.ok(!plan.args.includes('--exclude'));
   }
 });
 
