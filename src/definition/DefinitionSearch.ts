@@ -1,5 +1,6 @@
 import type { Client } from 'ssh2';
 import * as posixPath from 'path/posix';
+import { Utf8ChunkDecoder } from '../core/utf8';
 import type { SearchMatch, SearchOptions, SearchSettings } from '../core/types';
 import type { SearchResultStore } from '../search/SearchResultStore';
 import type { TranslationService } from '../i18n/TranslationService';
@@ -358,9 +359,12 @@ export class DefinitionSearch {
         this.session.setActiveChannel(stream);
         let acc = '';
         let lastProgressAt = 0;
+        // ctags 进度输出同样可能跨数据包切开多字节字符，使用跨 chunk 解码。
+        const stdoutDecoder = new Utf8ChunkDecoder();
+        const stderrDecoder = new Utf8ChunkDecoder();
 
         stream.on('data', (c: Buffer | string) => {
-          acc += Buffer.isBuffer(c) ? c.toString('utf8') : c;
+          acc += stdoutDecoder.write(c);
           if (!this.session.isCurrent(token)) {
             return;
           }
@@ -381,7 +385,7 @@ export class DefinitionSearch {
         });
 
         stream.stderr.on('data', (c: Buffer | string) => {
-          acc += Buffer.isBuffer(c) ? c.toString('utf8') : c;
+          acc += stderrDecoder.write(c);
         });
 
         stream.on('close', (code: number | undefined) => {

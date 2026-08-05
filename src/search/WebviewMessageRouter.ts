@@ -76,6 +76,9 @@ export class WebviewMessageRouter {
   private view?: WebviewMessageSender;
   private lastState: StatePayload = { type: 'state', running: false, summary: '' };
   private lastResults: SearchResultPayload = { type: 'results', mode: 'content', items: [] };
+  // 尚未合并进 lastResults 的增量批次：大结果场景下避免每次推送都对全量累积做
+  // merge（O(累积结果) 开销），改为追加式累积，仅由 getResults() 惰性生成快照。
+  private pendingIncremental: SearchResultPayload['items'] = [];
 
   public setView(view: { webview: WebviewMessageSender } | undefined): void {
     if (view) {
@@ -93,9 +96,10 @@ export class WebviewMessageRouter {
   ): void {
     if (replace) {
       this.lastResults = { type: 'results', requestId, mode, replace: true, items };
+      this.pendingIncremental = [];
     } else {
-      const merged = mergeResultItems(this.lastResults.mode === mode ? this.lastResults.items : [], items);
-      this.lastResults = { type: 'results', requestId, mode, items: merged };
+      // 增量仅追加累积，发送给 webview 的仍是本次增量；快照由 getResults() 惰性生成。
+      this.pendingIncremental = this.pendingIncremental.concat(items);
     }
     this.view?.postMessage({ type: 'results', payload: { type: 'results', requestId, mode, replace, items } });
   }
@@ -134,6 +138,11 @@ export class WebviewMessageRouter {
   }
 
   public getResults(): SearchResultPayload {
+    if (this.pendingIncremental.length > 0) {
+      const mergedItems = mergeResultItems(this.lastResults.items, this.pendingIncremental);
+      this.lastResults = { ...this.lastResults, items: mergedItems };
+      this.pendingIncremental = [];
+    }
     return this.lastResults;
   }
 

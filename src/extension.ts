@@ -75,6 +75,8 @@ const FILE_TYPE_ICON_RELATIVE_PATHS: Record<string, string> = {
 
 class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'ripgrepTool.searchView';
+  // 工作区信息（含 Git 根发现）的缓存时长：避免每次搜索/连接前重复遍历目录树。
+  private static readonly workspaceInfoTtlMs = 5000;
 
   private view?: vscode.WebviewView;
   private services!: Services;
@@ -423,27 +425,42 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async getWorkspaceInfo(): Promise<WorkspaceInfo> {
+  /**
+   * 工作区信息（含 Git 根发现）：短 TTL 缓存，避免每次搜索/连接前都重复遍历
+   * 目录树（网络盘工作区可能很慢）；force=true 时强制重新发现。
+   */
+  private async getWorkspaceInfo(force = false): Promise<WorkspaceInfo> {
+    const now = Date.now();
+    if (
+      !force &&
+      this.workspaceInfoCache &&
+      now - this.workspaceInfoCache.at < RipgrepSearchViewProvider.workspaceInfoTtlMs
+    ) {
+      return this.workspaceInfoCache.info;
+    }
     const info = await this.services.workspaceResolver.getWorkspaceInfo({
       workspaceNone: await this.services.translationService.translate('workspace_none'),
       remoteWorkspaceUnsupported: await this.services.translationService.translate('remote_workspace_unsupported'),
       remoteSearchPathRequired: await this.services.translationService.translate('err_remote_search_path_required')
     });
     this.workspaceInfo = info;
+    this.workspaceInfoCache = { at: now, info };
     return info;
   }
 
   /**
-   * 转到定义前的工作区信息：5 秒内复用，避免每次 Ctrl+点击都重复遍历网络目录发现 Git。
+   * 工作区结构可能变化（如新增/移除 Git 根、切换文件夹）时使缓存失效。
+   */
+  public invalidateWorkspaceInfoCache(): void {
+    this.workspaceInfoCache = undefined;
+  }
+
+  /**
+   * 转到定义前的工作区信息：复用 getWorkspaceInfo 的短 TTL 缓存，
+   * 避免每次 Ctrl+点击都重复遍历网络目录发现 Git。
    */
   private async getCachedWorkspaceInfo(): Promise<WorkspaceInfo> {
-    const now = Date.now();
-    if (this.workspaceInfoCache && now - this.workspaceInfoCache.at < 5000) {
-      return this.workspaceInfoCache.info;
-    }
-    const info = await this.getWorkspaceInfo();
-    this.workspaceInfoCache = { at: now, info };
-    return info;
+    return await this.getWorkspaceInfo();
   }
 
   /**
@@ -727,6 +744,10 @@ export function activate(context: vscode.ExtensionContext): void {
         const message = error instanceof Error ? error.message : String(error);
         void vscode.window.showErrorMessage(`Failed to reveal log file: ${message}`);
       }
+    }),
+    // 切换工作区文件夹后旧的 Git 发现结果立即失效。
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      provider.invalidateWorkspaceInfoCache();
     })
   );
 }

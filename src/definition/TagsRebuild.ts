@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import type { Client } from 'ssh2';
+import { Utf8ChunkDecoder } from '../core/utf8';
 import type { SearchSettings } from '../core/types';
 import { normalizeRemotePath } from '../core/paths';
 import type { TranslationService } from '../i18n/TranslationService';
@@ -168,8 +169,11 @@ export class TagsRebuild {
         let acc = '';
         let lastProgressAt = 0;
 
+        // ctags 进度输出同样可能跨数据包切开多字节字符，使用跨 chunk 解码。
+        const stdoutDecoder = new Utf8ChunkDecoder();
+        const stderrDecoder = new Utf8ChunkDecoder();
         stream.on('data', (c: Buffer | string) => {
-          acc += Buffer.isBuffer(c) ? c.toString('utf8') : c;
+          acc += stdoutDecoder.write(c);
           if (!this.session.isCurrent(token)) {
             return;
           }
@@ -190,7 +194,7 @@ export class TagsRebuild {
         });
 
         stream.stderr.on('data', (c: Buffer | string) => {
-          acc += Buffer.isBuffer(c) ? c.toString('utf8') : c;
+          acc += stderrDecoder.write(c);
         });
 
         stream.on('close', (code: number | undefined) => {

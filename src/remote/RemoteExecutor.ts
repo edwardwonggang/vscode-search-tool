@@ -1,4 +1,5 @@
 import type { Client, ClientChannel, SFTPWrapper } from 'ssh2';
+import { Utf8ChunkDecoder } from '../core/utf8';
 
 export type RemoteExecResult = {
   stdout: string;
@@ -88,6 +89,10 @@ export class RemoteExecutor {
     return await new Promise((resolve, reject) => {
       let settled = false;
       let activeStream: ClientChannel | undefined;
+      // SSH 数据包边界不保证落在 UTF-8 字符边界上，必须跨 chunk 解码，
+      // 否则多字节字符（如中文路径/内容）被切开时会解码成 U+FFFD 乱码。
+      const stdoutDecoder = new Utf8ChunkDecoder();
+      const stderrDecoder = new Utf8ChunkDecoder();
       const timeoutMs = execOptions.timeoutMs ?? DEFAULT_REMOTE_EXEC_TIMEOUT_MS;
       const finish = (callback: () => void): void => {
         if (settled) {
@@ -128,14 +133,14 @@ export class RemoteExecutor {
         let stdout = '';
         let stderr = '';
         stream.on('data', (chunk: Buffer | string) => {
-          const text = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk;
+          const text = stdoutDecoder.write(chunk);
           if (execOptions.collectStdout !== false) {
             stdout += text;
           }
           execOptions.onStdout?.(text);
         });
         stream.stderr.on('data', (chunk: Buffer | string) => {
-          const text = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk;
+          const text = stderrDecoder.write(chunk);
           if (stderr.length < MAX_STREAMED_STDERR_KEEP_CHARS) {
             stderr = appendBoundedHead(stderr, text, MAX_STREAMED_STDERR_KEEP_CHARS);
           }
