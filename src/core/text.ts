@@ -33,6 +33,48 @@ export function utf8ByteOffsetToUtf16Index(text: string, byteOffset: number): nu
   return utf16Index;
 }
 
+/**
+ * 批量计算一行文本中多个 UTF-8 字节偏移对应的 UTF-16 索引。
+ * 相比逐偏移调用 utf8ByteOffsetToUtf16Index（每个偏移都从行首线性扫描），
+ * 一次遍历即可得到全部结果；偏移落在多字节字符中间时返回该字符起始索引。
+ * @param text 单行文本
+ * @param byteOffsets 非负字节偏移数组，结果按入参顺序返回
+ */
+export function utf8ByteOffsetsToUtf16Indexes(text: string, byteOffsets: readonly number[]): number[] {
+  if (byteOffsets.length === 0) {
+    return [];
+  }
+  // 先按字节位置排序，一次线性扫描即可；结果按入参顺序回填，方便与 submatches 配对。
+  const order = byteOffsets
+    .map((offset, index) => ({ offset, index }))
+    .sort((left, right) => left.offset - right.offset);
+  const results = new Array<number>(byteOffsets.length);
+  let utf8Bytes = 0;
+  let utf16Index = 0;
+  for (const item of order) {
+    if (item.offset <= 0) {
+      results[item.index] = 0;
+      continue;
+    }
+    while (utf16Index < text.length && utf8Bytes < item.offset) {
+      const codePoint = text.codePointAt(utf16Index);
+      if (codePoint === undefined) {
+        break;
+      }
+      const char = String.fromCodePoint(codePoint);
+      const charBytes = Buffer.byteLength(char, 'utf8');
+      if (utf8Bytes + charBytes > item.offset) {
+        // 偏移落在多字节字符中间：返回该字符起始索引（与逐偏移版本语义一致）。
+        break;
+      }
+      utf8Bytes += charBytes;
+      utf16Index += char.length;
+    }
+    results[item.index] = utf16Index;
+  }
+  return results;
+}
+
 const SEARCH_PREVIEW_BEFORE_CHARS = 80;
 const SEARCH_PREVIEW_AFTER_CHARS = 160;
 const SEARCH_SYMBOL_MAX_CHARS = 256;

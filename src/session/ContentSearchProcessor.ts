@@ -1,4 +1,4 @@
-import { createSearchPreview, createSearchSymbol, utf8ByteOffsetToUtf16Index } from '../core/text';
+import { createSearchPreview, createSearchSymbol, utf8ByteOffsetsToUtf16Indexes } from '../core/text';
 import type { SearchResultStore } from '../search/SearchResultStore';
 
 export type ContentSearchEntry = {
@@ -46,9 +46,14 @@ export class ContentSearchProcessor {
     const lineNumber = data.line_number ?? 1;
     const bucket = resultStore.getOrCreate(target.uriString, target.legacyPath, relativePath);
 
-    for (const submatch of submatches) {
-      const start = utf8ByteOffsetToUtf16Index(lineText, submatch.start);
-      const end = utf8ByteOffsetToUtf16Index(lineText, submatch.end);
+    const utf16Indexes = utf8ByteOffsetsToUtf16Indexes(
+      lineText,
+      submatches.flatMap((submatch) => [submatch.start, submatch.end])
+    );
+    for (let matchIndex = 0; matchIndex < submatches.length; matchIndex += 1) {
+      const submatch = submatches[matchIndex];
+      const start = utf16Indexes[matchIndex * 2];
+      const end = utf16Indexes[matchIndex * 2 + 1];
       bucket.matches.push({
         path: target.legacyPath,
         uri: target.uriString,

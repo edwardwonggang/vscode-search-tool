@@ -28,7 +28,8 @@ import {
 import { normalizeSettings } from '../src/core/settings';
 import { createProjectSettingsKey, SettingsStore, type SettingsStorage } from '../src/core/SettingsStore';
 import { shellEscape } from '../src/core/shell';
-import { createSearchPreview, escapeHtml, utf8ByteOffsetToUtf16Index } from '../src/core/text';
+import { createSearchPreview, escapeHtml, utf8ByteOffsetToUtf16Index, utf8ByteOffsetsToUtf16Indexes } from '../src/core/text';
+import { Utf8ChunkDecoder } from '../src/core/utf8';
 import type { SearchOptions, SearchSettings } from '../src/core/types';
 import { buildDefinitionLocations } from '../src/definition/definitionLocations';
 import {
@@ -36,6 +37,7 @@ import {
   buildGitInsideWorkTreeCommand,
   buildGitTopCommand,
   buildExecutableVersionCommand,
+  buildFileSearchGlobArgs,
   buildRemoteFileNameSearchCommand,
   buildMkdirCommand,
   buildRemoteCommand,
@@ -56,7 +58,8 @@ import { addContentSearchMatch } from '../src/search/ContentSearchResults';
 import { populateFileSearchResults } from '../src/search/FileSearchService';
 import { JsonLineBuffer } from '../src/search/JsonLineBuffer';
 import { resolveMatchSelection } from '../src/search/MatchNavigation';
-import { mergeResultItems } from '../src/search/WebviewMessageRouter';
+import { WebviewMessageRouter, mergeResultItems } from '../src/search/WebviewMessageRouter';
+import type { SearchResultPayload } from '../src/search/WebviewMessageRouter';
 import { buildContentSearchArgs, buildFileSearchArgs } from '../src/session/rgArgs';
 import { filterRipgrepStderr, isIgnorableRipgrepFailure, isRemoteExecutableMissing } from '../src/session/rgDiagnostics';
 import { ContentSearchProcessor } from '../src/session/ContentSearchProcessor';
@@ -635,8 +638,18 @@ test('remote command builders quote paths and args consistently', () => {
   assert.equal(buildExecutableVersionCommand('/tmp/rg'), "'/tmp/rg' --version 2>/dev/null | head -n 1 || true");
   assert.equal(
     buildRemoteFileNameSearchCommand('/tmp/rg', '/repo', ['--files', '--hidden'], 'Main', false),
-    "cd '/repo' && '/tmp/rg' '--files' '--hidden' | awk -v needle='Main' 'BEGIN { needle=tolower(needle) } { name=$0; sub(/^.*\\//, \"\", name); if (index(tolower(name), needle) > 0) print }'"
+    "cd '/repo' && '/tmp/rg' '--files' '--hidden' '--iglob' '**/*Main*'"
   );
+  assert.equal(
+    buildRemoteFileNameSearchCommand('/tmp/rg', '/repo', ['--files', '--hidden'], 'Main', true),
+    "cd '/repo' && '/tmp/rg' '--files' '--hidden' '-g' '**/*Main*'"
+  );
+  assert.equal(
+    buildRemoteFileNameSearchCommand('/tmp/rg', '/repo', ['--files', '--hidden'], 'a[b]?*c', false),
+    "cd '/repo' && '/tmp/rg' '--files' '--hidden' '--iglob' '**/*a\\[b\\]\\?\\*c*'"
+  );
+  assert.deepEqual(buildFileSearchGlobArgs('Main', false), ['--iglob', '**/*Main*']);
+  assert.deepEqual(buildFileSearchGlobArgs('Main', true), ['-g', '**/*Main*']);
 });
 
 test('ripgrep diagnostics ignore permission denied lines without hiding other failures', () => {
@@ -1309,4 +1322,109 @@ test('ContentSearchProcessor filters repo-relative paths while preserving worksp
   assert.equal(added, 1);
   assert.equal(items[0]?.relativePath, 'B/src/main.c');
   assert.equal(items[0]?.matches[0]?.relativePath, 'B/src/main.c');
+});
+
+
+test('Utf8ChunkDecoder decodes multibyte chars split across chunk boundaries', () => {
+  const samples = [
+    '中文路径/文件.c',
+    'emoji: 你好👋世界',
+    'a中b文c混d合e'
+  ];
+  for (const sample of samples) {
+    const bytes = Buffer.from(sample, 'utf8');
+    for (let step = 1; step <= bytes.length; step += 1) {
+      const decoder = new Utf8ChunkDecoder();
+      let decoded = '';
+      for (let offset = 0; offset < bytes.length; offset += step) {
+        decoded += decoder.write(bytes.subarray(offset, Math.min(bytes.length, offset + step)));
+      }
+      decoded += decoder.end();
+      assert.equal(decoded, sample);
+      assert.ok(!decoded.includes('\uFFFD'));
+    }
+  }
+});
+
+test('Utf8ChunkDecoder passes through plain strings and flushes nothing on clean end', () => {
+  const decoder = new Utf8ChunkDecoder();
+  assert.equal(decoder.write('already decoded'), 'already decoded');
+  assert.equal(decoder.write(Buffer.from('ascii only', 'utf8')), 'ascii only');
+  assert.equal(decoder.end(), '');
+});
+
+
+test('WebviewMessageRouter posts only incremental items and builds lazy snapshot', () => {
+  const sent: unknown[] = [];
+  const router = new WebviewMessageRouter();
+  router.setView({ webview: { postMessage: (message) => sent.push(message), show: () => {} } });
+
+  const itemA = { path: 'a.ts', relativePath: 'a.ts', count: 1, matches: [{ path: 'a.ts', line: 1, column: 1, endColumn: 2, preview: 'a' }] };
+  const itemB = { path: 'b.ts', relativePath: 'b.ts', count: 1, matches: [{ path: 'b.ts', line: 1, column: 1, endColumn: 2, preview: 'b' }] };
+
+  router.postResults('content', [itemA], false, 1);
+  router.postResults('content', [itemB], false, 1);
+
+  assert.equal(sent.length, 2);
+  const first = sent[0] as { payload: SearchResultPayload };
+  const second = sent[1] as { payload: SearchResultPayload };
+  assert.deepEqual(first.payload.items, [itemA]);
+  assert.deepEqual(second.payload.items, [itemB]);
+  // 惰性快照：getResults 一次性返回合并后的全量
+  assert.deepEqual(router.getResults().items.map((item) => item.path), ['a.ts', 'b.ts']);
+  // 再次 getResults 不重复累积
+  assert.equal(router.getResults().items.length, 2);
+  // replace 清空累积
+  router.postResults('content', [], true, 2);
+  assert.deepEqual(router.getResults().items, []);
+});
+
+test('WebviewMessageRouter merges repeated matches into a lazy snapshot without duplicates', () => {
+  const router = new WebviewMessageRouter();
+  const itemA1 = { path: 'a.ts', relativePath: 'a.ts', count: 2, matches: [
+    { path: 'a.ts', line: 1, column: 1, endColumn: 2, preview: 'one' },
+    { path: 'a.ts', line: 2, column: 1, endColumn: 2, preview: 'two' }
+  ] };
+  const itemA2 = { path: 'a.ts', relativePath: 'a.ts', count: 1, matches: [
+    { path: 'a.ts', line: 3, column: 1, endColumn: 2, preview: 'three' }
+  ] };
+  router.postResults('content', [itemA1], false, 1);
+  router.postResults('content', [itemA2], false, 1);
+  const snapshot = router.getResults();
+  assert.deepEqual(snapshot.items[0]?.matches.map((match) => match.line), [1, 2, 3]);
+});
+
+
+test('utf8ByteOffsetsToUtf16Indexes matches per-offset results in one scan', () => {
+  const text = 'a你😀z中';
+  const offsets = [0, 1, 2, 4, 5, 6, 7, 8];
+  const expected = offsets.map((offset) => utf8ByteOffsetToUtf16Index(text, offset));
+  assert.deepEqual(utf8ByteOffsetsToUtf16Indexes(text, offsets), expected);
+  assert.deepEqual(utf8ByteOffsetsToUtf16Indexes(text, []), []);
+});
+
+test('content search processor computes columns for multiple submatches on one line', () => {
+  const store = new SearchResultStore();
+  const added = ContentSearchProcessor.processLine({
+    type: 'match',
+    data: {
+      path: { text: 'src/main.c' },
+      lines: { text: 'aa你bb你cc\n' },
+      line_number: 3,
+      submatches: [
+        { start: 0, end: 1 },
+        { start: 5, end: 6 },
+        { start: 10, end: 11 }
+      ]
+    }
+  }, () => true, (relativePath) => ({
+    uriString: `mock://${relativePath}`,
+    legacyPath: `/repo/${relativePath}`,
+    relativePath
+  }), store);
+
+  assert.equal(added, 3);
+  const matches = store.snapshot('content').items[0]?.matches ?? [];
+  // 'aa你bb你cc' 字节: a(0-1) a(1-2) 你(2-5) b(5-6) b(6-7) 你(7-10) c(10-11) c(11-12)
+  assert.deepEqual(matches.map((match) => [match.column, match.endColumn]), [[1, 2], [4, 5], [7, 8]]);
 });
