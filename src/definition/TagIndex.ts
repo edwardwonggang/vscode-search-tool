@@ -120,7 +120,9 @@ export function parseTagIndexMeta(text: string): TagIndexMeta | undefined {
 
 export function decideTagIndexRefresh(input: TagIndexRefreshInput): TagIndexRefreshDecision {
   if (!input.tagsExists) {
-    return { refresh: false, reason: 'tags-missing' };
+    // tags 缺失也返回构建：后台自动刷新负责预热索引，避免用户首次跳转定义
+    // 时现场全量构建 tags 造成明显等待。
+    return { refresh: true, reason: 'tags-missing' };
   }
   if (!input.meta) {
     return { refresh: true, reason: 'meta-missing' };

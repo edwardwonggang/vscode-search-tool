@@ -229,12 +229,17 @@ export class SearchCoordinator {
         definitionMode: true,
         triggerSource: 'context-menu'
       };
-      for (const repository of resolved) {
-        const ok = await lookupDefinitionSearch.execute(token, options, settings, repository, silentRouter, true, Date.now());
-        if (!ok) {
-          break;
-        }
-      }
+      // 多 Git 根并行查找定义：每个仓库独立的探针+扫描共享同一 SSH 连接，
+      // 总耗时从串行累加降为最慢仓库，避免多个根时跳转等待线性增长。
+      await Promise.all(resolved.map((repository) => lookupDefinitionSearch.execute(
+        token,
+        options,
+        settings,
+        repository,
+        silentRouter,
+        true,
+        Date.now()
+      )));
     } catch (error) {
       this.logger.log(`lookup-definition error: ${error instanceof Error ? error.message : String(error)}`);
     }
