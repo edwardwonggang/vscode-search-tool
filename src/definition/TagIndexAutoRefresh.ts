@@ -104,8 +104,7 @@ export class TagIndexAutoRefresh {
     const paths = getTagIndexPaths(gitTop);
     const tagsExists = await this.remoteFileExists(client, paths.tagsPath);
     if (!tagsExists) {
-      this.logger.debug(`tag auto-refresh skipped: tags missing at ${paths.tagsPath}`);
-      return;
+      this.logger.log(`tag auto-refresh will build missing tags at ${paths.tagsPath}`);
     }
 
     const nextBuildAt = this.nextBuildAt.get(buildKey) ?? 0;

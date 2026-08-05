@@ -762,7 +762,7 @@ test('ctags tag lines parse symbol, path, line, and preview', () => {
   });
 });
 
-test('tag index refresh decisions use metadata without rebuilding missing tags in the background', () => {
+test('tag index refresh decisions build missing tags in the background', () => {
   const meta = createTagIndexMeta({
     gitTop: '/repo',
     gitHead: 'abc',
@@ -778,7 +778,7 @@ test('tag index refresh decisions use metadata without rebuilding missing tags i
     ctagsArgsKey: TAG_INDEX_CTAGS_ARGS_KEY,
     refreshIntervalMs: 1000,
     nowMs: 5000
-  }), { refresh: false, reason: 'tags-missing' });
+  }), { refresh: true, reason: 'tags-missing' });
 
   assert.deepEqual(decideTagIndexRefresh({
     tagsExists: true,

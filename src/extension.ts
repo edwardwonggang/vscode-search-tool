@@ -361,6 +361,25 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
+  /**
+   * 激活时后台预热 SSH 连接：配置了远端搜索就提前建连并复用，
+   * 避免用户未打开侧边栏时首次右键跳转定义还要等待建连。
+   * 失败静默，不影响激活；与 autoConnectIfReady 共用同一连接复用逻辑。
+   */
+  public async warmUpConnection(): Promise<void> {
+    try {
+      const settings = this.getSettings();
+      if (!this.services.connectionController.isRemoteSearchConfigured(settings)) {
+        return;
+      }
+      await this.services.connectionController.getOrCreateClient(settings);
+      this.services.logger.debug('ssh warm-up connection ready');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.services.logger.log(`ssh warm-up connection failed: ${message}`);
+    }
+  }
+
   private async autoConnectIfReady(reason: string): Promise<void> {
     if (this.autoConnectInFlight) {
       return;
@@ -713,6 +732,8 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
 
 export function activate(context: vscode.ExtensionContext): void {
   const provider = new RipgrepSearchViewProvider(context);
+  // 激活即预热 SSH，右键跳转定义/定义提供器不再等待首次建连。
+  void provider.warmUpConnection();
   context.subscriptions.push(
     provider,
     vscode.languages.registerDefinitionProvider(

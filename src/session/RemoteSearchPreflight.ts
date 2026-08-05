@@ -62,14 +62,8 @@ export class RemoteSearchPreflight {
     if (!this.session?.isCurrent(token)) {
       return resolvedRepositories;
     }
-
-    for (const repository of resolvedRepositories) {
-      this.session?.postPhase(`Checking remote Git root: ${repository.remoteCwd}`);
-      await this.remoteGitRootGuard.ensureGitRoot(settings, repository.remoteCwd, token);
-      if (!this.session?.isCurrent(token)) {
-        return resolvedRepositories;
-      }
-    }
+    // 远端 Git 根校验由定义搜索探针在单次 SSH 往返内完成（gitTop + insideWorkTree），
+    // 不再在此额外串行执行 git rev-parse，减少每次跳转/搜索前的一次远端往返。
 
     const message = resolvedRepositories.length === 1
       ? `Current SSH path: ${resolvedRepositories[0].remoteCwd}`
