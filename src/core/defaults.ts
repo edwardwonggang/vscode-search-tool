@@ -3,13 +3,10 @@ export const REMOTE_HOME_ROOT = '/home';
 
 export const DEFAULT_INCLUDE_GLOBS: string[] = [];
 
-// 定义搜索（含右键“转到定义”）默认排除的路径：mock 文件、cpp 文件、unittest 目录。
-export const DEFAULT_DEFINITION_EXCLUDE_GLOBS = [
-  '**/*mock*',
-  '**/*mock*/**',
-  '**/*.cpp',
-  '**/unittest/**'
-];
+// 定义搜索（含右键“转到定义”）默认排除的路径。默认清空：此前默认过滤
+// **/*.cpp、*mock*、unittest 会让大量 C/C++ 定义查不到，导致“找不到定义”。
+// 需要排除时由用户在设置中自行配置。
+export const DEFAULT_DEFINITION_EXCLUDE_GLOBS: string[] = [];
 
 export const DEFAULT_EXCLUDE_GLOBS = [
   '**/.git/**',

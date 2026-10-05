@@ -1,4 +1,5 @@
 import type { SearchMatch } from '../core/types';
+import { compareSearchFiles } from '../core/ranking';
 
 export type SearchFileResult = {
   path: string;
@@ -25,10 +26,21 @@ export type SearchResultItem = SearchResultSnapshot['items'][number];
 export class SearchResultStore {
   private readonly cache = new Map<string, SearchFileResult>();
   private readonly dirtyKeys = new Set<string>();
+  // 增量维护的匹配总数：进度定时器每 250ms 读一次，避免 O(文件数) 遍历。
+  private matchTotal = 0;
+  // 当前搜索结果关联的查询词：用于排序时“被查询符号定义优先”。
+  private currentQuery = '';
 
   public clear(): void {
     this.cache.clear();
     this.dirtyKeys.clear();
+    this.matchTotal = 0;
+    this.currentQuery = '';
+  }
+
+  /** 设置当前查询词，供排序器做“被查询符号定义优先”判定；搜索开始时调用。 */
+  public setQuery(query: string): void {
+    this.currentQuery = String(query ?? '').trim();
   }
 
   public get size(): number {
@@ -45,12 +57,15 @@ export class SearchResultStore {
   }
 
   public setFileResult(key: string, result: SearchFileResult): void {
+    const previous = this.cache.get(key);
+    this.matchTotal += result.matches.length - (previous?.matches.length ?? 0);
     this.cache.set(key, result);
     this.dirtyKeys.add(key);
   }
 
   public addMatch(key: string, path: string, relativePath: string, match: SearchMatch): void {
     this.getOrCreate(key, path, relativePath).matches.push(match);
+    this.matchTotal += 1;
     this.dirtyKeys.add(key);
   }
 
@@ -60,12 +75,13 @@ export class SearchResultStore {
     }
   }
 
+  /** 直接向 getOrCreate 返回的 bucket push 匹配后，调用方需上报追加数量以维持增量计数。 */
+  public recordAppendedMatches(count: number): void {
+    this.matchTotal += count;
+  }
+
   public totalMatches(): number {
-    let total = 0;
-    for (const result of this.cache.values()) {
-      total += result.matches.length;
-    }
-    return total;
+    return this.matchTotal;
   }
 
   public snapshot(mode: SearchResultMode): SearchResultSnapshot {
@@ -73,7 +89,7 @@ export class SearchResultStore {
       type: 'results',
       mode,
       items: Array.from(this.cache.values())
-        .sort((left, right) => left.relativePath.localeCompare(right.relativePath))
+        .sort((left, right) => compareSearchFiles(left, right, this.currentQuery))
         .map((file) => ({
           path: file.path,
           relativePath: file.relativePath,
@@ -92,7 +108,7 @@ export class SearchResultStore {
       }
     }
     this.dirtyKeys.clear();
-    items.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+    items.sort((left, right) => compareSearchFiles(left, right, this.currentQuery));
     return { type: 'results', mode, items };
   }
 }

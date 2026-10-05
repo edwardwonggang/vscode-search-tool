@@ -1,10 +1,21 @@
 import { normalizeExcludeGlobForSearch, splitUserGlobs } from '../core/glob';
 import type { SearchOptions, SearchSettings } from '../core/types';
+import { TAGS_FILE_NAME, TAGS_META_FILE_NAME, TAGS_TMP_FILE_NAME } from '../definition/TagIndex';
 
 export type ContentSearchArgOptions = {
   contextLines: number;
   threads: number;
 };
+
+// 定义搜索在远端 git 根生成的索引文件（大仓库可达数百 MB 的单行密集文本）。
+// 内置排除，避免内容/文件搜索全文扫描这些文件；不放进用户可改的 excludeGlobs 设置。
+const TAG_INDEX_EXCLUDE_GLOBS = [TAGS_FILE_NAME, TAGS_TMP_FILE_NAME, TAGS_META_FILE_NAME];
+
+function appendTagIndexExcludes(args: string[]): void {
+  for (const name of TAG_INDEX_EXCLUDE_GLOBS) {
+    args.push('--glob', `!${name}`);
+  }
+}
 
 export function buildContentSearchArgs(
   options: SearchOptions,
@@ -29,6 +40,7 @@ export function buildContentSearchArgs(
     args.push('--context', String(argOptions.contextLines));
   }
 
+  appendTagIndexExcludes(args);
   appendSettingsGlobs(args, settings);
   appendUserExcludeGlobs(args, options.exclude);
   args.push(options.query);
@@ -38,6 +50,7 @@ export function buildContentSearchArgs(
 
 export function buildFileSearchArgs(options: SearchOptions, settings: SearchSettings): string[] {
   const args = ['--files', '--line-buffered', '--hidden', '--no-ignore-vcs'];
+  appendTagIndexExcludes(args);
   appendSettingsGlobs(args, settings);
   appendUserIncludeGlobs(args, options.include);
   appendUserExcludeGlobs(args, options.exclude);

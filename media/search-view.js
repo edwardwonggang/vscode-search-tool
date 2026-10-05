@@ -439,6 +439,7 @@
     isWorkspaceOk: () => workspaceOk,
     getWorkspaceMessage: () => workspaceMessage || t('workspace_none'),
     getIsFileSearch: () => currentResultMode === 'file',
+    getCurrentQuery: () => (currentOptions && currentOptions.query) || '',
     renderWorkspaceBlocked,
     renderEmpty: () => `<div class="empty">${escapeHtml(t('empty_results'))}</div>`,
     renderFileIcon: (relativePath) => iconRegistry.renderFileIcon(relativePath),

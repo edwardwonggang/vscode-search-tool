@@ -1,5 +1,6 @@
 import { shellEscape } from '../core/shell';
 import { buildTagProbeCommand } from './tagProbe';
+import { TAG_INDEX_SAMPLE_BYTES } from './TagIndex';
 
 /**
  * BRE 字面量转义：定义搜索的名称通常是 C 标识符，但侧边栏输入允许任意文本；
@@ -10,11 +11,13 @@ export function escapeBreString(value: string): string {
 }
 
 /**
- * 构建“有界”tags 搜索命令：universal-ctags 生成的 tags 文件按名称排序，
- * 同一符号的所有条目连续排列。先 grep -n -m1 定位首条匹配行的行号
- * （-m1 在首条命中即停止，避免全量扫描数百 MB 的 tags 文件），再 tail 从
- * 该行号起读取，awk 打印以 query 开头的连续块后立即退出。与全量 rg 相比
- * 只读取匹配块附近的字节，耗时从“文件大小相关”降为“符号位置相关”。
+ * 构建“有界”tags 搜索命令（readtags 缺失时的最差回退）：universal-ctags
+ * 生成的 tags 文件按名称排序，同一符号的所有条目连续排列。先 grep -n -m1
+ * 定位首条匹配行的行号（-m1 在首条命中即停止，避免全量扫描数百 MB 的 tags
+ * 文件），再 tail 从该行号起读取，awk 打印以 query 开头的连续块后立即退出。
+ * 与全量 rg 相比只读取匹配块附近的字节，耗时从“文件大小相关”降为“符号位置
+ * 相关”。优先走 tags.sidx 稀疏索引快速路径，只有 sidx 缺失/定位失败时才落
+ * 到本回退。
  */
 export function buildBoundedTagSearchCommand(
   tagsDir: string,
@@ -33,16 +36,40 @@ export function buildBoundedTagSearchCommand(
 
 /**
  * 构建“readtags 优先”的扫描片段：远端存在 readtags 时用二分查找（O(log N)），
- * 否则回退到 grep -m1 + tail + awk 的有界扫描。tagsPathArg 是 shell 引用的
- * tags 文件路径表达式（可以是 "$top/tags" 这样的变量展开）。
+ * 否则若有 tags.sidx 稀疏索引，先用它定位符号所在块再做有界 dd 扫描；两者都
+ * 不可用时才回退到 grep -m1 + tail + awk 的线性扫描。tagsPathArg / sidxPathArg
+ * 是 shell 引用的路径表达式（可以是 "$top/tags" 这样的变量展开）。
  */
-function buildTagScanBlock(tagsPathArg: string, query: string): string {
+function buildTagScanBlock(tagsPathArg: string, sidxPathArg: string, query: string): string {
   const escapedQuery = shellEscape(query);
   const anchoredPrefixPattern = `^${escapeBreString(query)}[[:space:]]`;
   const grepFallback = [
     `first=$(grep -n -m1 ${shellEscape(anchoredPrefixPattern)} ${tagsPathArg} | head -n 1 | cut -d: -f1)`,
     `if test -n "$first"; then`,
     `  tail -n +"$first" ${tagsPathArg} | awk -F '\\t' -v n=${escapedQuery} '$1==n{print;next}{exit}'`,
+    `fi`
+  ];
+  // 稀疏索引快速路径：sidx 记录每个 split 块的首个符号名，块按符号名排序，
+  // 用 awk 找到最后一个“首符号 <= query”的块号，再对该块做有界 dd 扫描，
+  // 避免从 tags 头部线性读取。块 0 含头部注释行，块 >0 首行为上一块的跨边界
+  // 残行，读取窗口统一多取 2 块并跳过首行以覆盖边界。
+  const sidxFallback = [
+    `if test -f ${sidxPathArg}; then`,
+    `  block=$(LC_ALL=C awk -F '\\t' -v q=${escapedQuery} '$2<=q{last=$1} $2>q{print last; exit} END{if(last!="")print last}' ${sidxPathArg})`,
+    `  if test -n "$block"; then`,
+    `    start=$((block * ${TAG_INDEX_SAMPLE_BYTES}))`,
+    `    count=$((3 * ${TAG_INDEX_SAMPLE_BYTES}))`,
+    `    out=$(LC_ALL=C dd if=${tagsPathArg} bs=1 skip=$start count=$count 2>/dev/null | LC_ALL=C awk -F '\\t' -v n=${escapedQuery} -v skip=$block 'skip>0 && NR==1{next} $1==n{print;f=1;next} f && $1!=n{exit}')`,
+    `    if test -n "$out"; then`,
+    `      printf '%s\\n' "$out"`,
+    `    else`,
+    ...grepFallback.map((line) => `      ${line}`),
+    `    fi`,
+    `  else`,
+    ...grepFallback.map((line) => `    ${line}`),
+    `  fi`,
+    `else`,
+    ...grepFallback.map((line) => `  ${line}`),
     `fi`
   ];
   return [
@@ -53,10 +80,10 @@ function buildTagScanBlock(tagsPathArg: string, query: string): string {
     `  if test -n "$out"; then`,
     `    printf '%s\\n' "$out"`,
     `  else`,
-    ...grepFallback.map((line) => `    ${line}`),
+    ...sidxFallback.map((line) => `    ${line}`),
     `  fi`,
     `else`,
-    ...grepFallback.map((line) => `  ${line}`),
+    ...sidxFallback.map((line) => `  ${line}`),
     `fi`
   ].join('\n');
 }
@@ -67,7 +94,7 @@ function buildTagScanBlock(tagsPathArg: string, query: string): string {
 export function buildTagSearchCommand(tagsDir: string, tagsBase: string, query: string): string {
   return [
     `cd ${shellEscape(tagsDir)}`,
-    buildTagScanBlock(shellEscape(`${tagsDir}/${tagsBase}`), query)
+    buildTagScanBlock(shellEscape(`${tagsDir}/${tagsBase}`), shellEscape(`${tagsDir}/tags.sidx`), query)
   ].join('\n');
 }
 
@@ -82,7 +109,7 @@ export function buildTagProbeAndSearchCommand(
   query: string
 ): string {
   const probe = buildTagProbeCommand(remoteCwd, rgPath, ctagsPath);
-  const scanBlock = buildTagScanBlock('"$top/tags"', query);
+  const scanBlock = buildTagScanBlock('"$top/tags"', '"$top/tags.sidx"', query);
   return [
     probe,
     `if test "$tags" = y && test -n "$top"; then`,

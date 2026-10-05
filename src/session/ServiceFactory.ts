@@ -20,6 +20,15 @@ const DEFAULT_REMOTE_CTAGS_PATH = '/tmp/ripgreptool-ctags';
 const BUNDLED_CTAGS_RELATIVE_PATH = 'assets/bin/ctags';
 const SEARCH_VIEW_I18N_RELATIVE_PATH = 'media/i18n/search-view.csv';
 
+/**
+ * 生成唯一的工作区标识符，用于区分不同 VSCode 窗口的 SSH 连接。
+ * 多开场景下，每个窗口应有独立的连接以避免状态竞争。
+ */
+function generateWorkspaceId(): string {
+  // 使用时间戳 + 随机数生成唯一 ID
+  return `ws-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+}
+
 export type Services = {
   logger: ExtensionLogger;
   settingsStore: SettingsStore;
@@ -55,7 +64,12 @@ export function createServices(context: ExtensionContext): Services {
     )
   }, resultStore);
 
-  const sshClientManager = new SshClientManager(logger);
+  // 为当前窗口生成唯一的工作区标识符，确保多开时 SSH 连接相互独立
+  const workspaceId = generateWorkspaceId();
+  const sshClientManager = new SshClientManager(logger, {
+    compress: config.get<boolean>('sshCompression', true),
+    workspaceId
+  });
   const remoteExecutor = new RemoteExecutor({
     logger,
     setActiveChannel: (channel, previous) => session.setActiveChannel(channel, previous)
@@ -95,7 +109,8 @@ export function createServices(context: ExtensionContext): Services {
       contextLines: Math.max(0, config.get<number>('contextLines', 0)),
       threads: Math.max(0, config.get<number>('threads', 0)),
       resultRefreshMs,
-      definitionExcludeGlobs
+      definitionExcludeGlobs,
+      maxResults: Math.max(0, config.get<number>('maxResults', 20000))
     },
     {
       resultRefreshMs

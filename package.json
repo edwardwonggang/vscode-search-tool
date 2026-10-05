@@ -2,7 +2,7 @@
   "name": "ripgreptool",
   "displayName": "Ripgrep Tool",
   "description": "Remote ripgrep search in the sidebar. Limits and setup are in the README (extension details), not in the in-editor UI.",
-  "version": "0.0.92",
+  "version": "0.0.100",
   "publisher": "local",
   "license": "UNLICENSED",
   "extensionKind": [
@@ -89,16 +89,24 @@
           "default": false,
           "description": "Enable detailed diagnostics in the 'Ripgrep Tool' output channel."
         },
+        "ripgrepTool.sshCompression": {
+          "type": "boolean",
+          "default": true,
+          "description": "Negotiate zlib compression on the SSH connection. Speeds up large result streams on slow links at a small CPU cost; takes effect on the next connection."
+        },
+        "ripgrepTool.maxResults": {
+          "type": "number",
+          "default": 20000,
+          "minimum": 0,
+          "maximum": 1000000,
+          "description": "Stop streaming after this many matches and mark the results as truncated. Use 0 for unlimited."
+        },
         "ripgrepTool.definitionExcludeGlobs": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "default": [
-            "**/*mock*",
-            "**/*.cpp",
-            "**/unittest/**"
-          ],
+          "default": [],
           "description": "Default exclude globs applied to definition search results, including the right-click Go to Definition command."
         }
       }

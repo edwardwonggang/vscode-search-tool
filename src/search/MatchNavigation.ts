@@ -16,9 +16,10 @@ export function resolveMatchSelection(
   const safeLineCount = Math.max(1, lineCount);
   const requestedLine = clamp(match.line - 1, 0, safeLineCount - 1);
   const symbol = match.symbolName || getPreviewSymbol(match.preview, match.column, match.endColumn);
-  const lineIndex = resolveLineIndex(safeLineCount, getLineText, requestedLine, match.preview, symbol);
+  const isDefinition = !!match.symbolName;
+  const lineIndex = resolveLineIndex(safeLineCount, getLineText, requestedLine, match.preview, symbol, isDefinition);
   const lineText = getLineText(lineIndex);
-  const startCharacter = findBestMatchColumn(lineText, match, symbol);
+  const startCharacter = findBestMatchColumn(lineText, match, symbol, isDefinition);
   const width = Math.max(1, symbol.length || match.endColumn - match.column);
   const endCharacter = Math.min(lineText.length, startCharacter + width);
 
@@ -34,10 +35,11 @@ function resolveLineIndex(
   getLineText: (lineIndex: number) => string,
   requestedLine: number,
   preview: string,
-  symbol: string
+  symbol: string,
+  isDefinition: boolean
 ): number {
   const previewText = preview.trim();
-  if (lineMatches(getLineText(requestedLine), previewText, symbol)) {
+  if (lineMatches(getLineText(requestedLine), previewText, symbol, isDefinition)) {
     return requestedLine;
   }
 
@@ -51,8 +53,11 @@ function resolveLineIndex(
   }
 
   if (symbol) {
+    // 定义跳转优先找“整词出现”的附近行，避免 ctags 行号漂移后落在引用处或子串处。
     const symbolLine = findNearbyLine(lineCount, requestedLine, (lineIndex) =>
-      getLineText(lineIndex).includes(symbol)
+      isDefinition
+        ? containsWord(getLineText(lineIndex), symbol)
+        : getLineText(lineIndex).includes(symbol)
     );
     if (symbolLine !== undefined) {
       return symbolLine;
@@ -84,8 +89,11 @@ function findNearbyLine(
   return undefined;
 }
 
-function lineMatches(lineText: string, previewText: string, symbol: string): boolean {
-  return lineMatchesPreview(lineText, previewText) || (!!symbol && lineText.includes(symbol));
+function lineMatches(lineText: string, previewText: string, symbol: string, isDefinition: boolean): boolean {
+  return (
+    lineMatchesPreview(lineText, previewText) ||
+    (!!symbol && (isDefinition ? containsWord(lineText, symbol) : lineText.includes(symbol)))
+  );
 }
 
 function lineMatchesPreview(lineText: string, previewText: string): boolean {
@@ -106,13 +114,19 @@ function lineMatchesPreview(lineText: string, previewText: string): boolean {
 function findBestMatchColumn(
   lineText: string,
   match: Pick<SearchMatch, 'column' | 'endColumn' | 'preview'>,
-  symbol: string
+  symbol: string,
+  isDefinition: boolean
 ): number {
   const requested = clamp(match.column - 1, 0, lineText.length);
   if (!symbol) {
     return requested;
   }
-  if (lineText.slice(requested, requested + symbol.length) === symbol) {
+  if (isDefinition) {
+    const wholeWordAtRequested = containsWordAt(lineText, symbol, requested);
+    if (wholeWordAtRequested) {
+      return requested;
+    }
+  } else if (lineText.slice(requested, requested + symbol.length) === symbol) {
     return requested;
   }
 
@@ -122,15 +136,52 @@ function findBestMatchColumn(
     return previewColumn;
   }
 
-  const afterRequested = lineText.indexOf(symbol, requested);
+  const afterRequested = isDefinition
+    ? indexOfWord(lineText, symbol, requested)
+    : lineText.indexOf(symbol, requested);
   if (afterRequested >= 0) {
     return afterRequested;
   }
-  const anyColumn = lineText.indexOf(symbol);
+  const anyColumn = isDefinition ? indexOfWord(lineText, symbol, 0) : lineText.indexOf(symbol);
   if (anyColumn >= 0) {
     return anyColumn;
   }
   return requested;
+}
+
+function containsWord(text: string, word: string): boolean {
+  return indexOfWord(text, word, 0) >= 0;
+}
+
+function containsWordAt(text: string, word: string, index: number): boolean {
+  if (!word || index < 0 || index + word.length > text.length) {
+    return false;
+  }
+  if (text.slice(index, index + word.length) !== word) {
+    return false;
+  }
+  return isWordBoundary(text, index - 1) && isWordBoundary(text, index + word.length);
+}
+
+function indexOfWord(text: string, word: string, fromIndex: number): number {
+  if (!word) {
+    return -1;
+  }
+  let index = text.indexOf(word, Math.max(0, fromIndex));
+  while (index >= 0) {
+    if (isWordBoundary(text, index - 1) && isWordBoundary(text, index + word.length)) {
+      return index;
+    }
+    index = text.indexOf(word, index + 1);
+  }
+  return -1;
+}
+
+function isWordBoundary(text: string, index: number): boolean {
+  if (index < 0 || index >= text.length) {
+    return true;
+  }
+  return !/[A-Za-z0-9_]/u.test(text[index] ?? '');
 }
 
 function getPreviewSymbol(preview: string, column: number, endColumn: number): string {

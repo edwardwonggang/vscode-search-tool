@@ -54,12 +54,13 @@ export function parseTagLine(line: string, query: string, tagsBaseRemote: string
   const lineNumMatch = /(?:^|\t)line:(\d+)(?:\t|$)/u.exec(fields);
   const parsedLine = lineNumMatch ? Number.parseInt(lineNumMatch[1] ?? '1', 10) : 1;
   const decodedPreview = decodeExCommandPreview(excmd);
-  const preview = decodedPreview.length > 200 ? `${decodedPreview.slice(0, 200)}...` : decodedPreview;
-  if (isFunctionKind(kind) && isLikelyDeclarationPreview(preview)) {
+  if (isFunctionKind(kind) && isLikelyDeclarationPreview(decodedPreview)) {
     return null;
   }
-  const symbolIndex = preview.indexOf(name);
+  // 列号必须基于完整解出的行内容计算：截断后的 preview 会丢掉符号导致列号错位。
+  const symbolIndex = decodedPreview.indexOf(name);
   const column = symbolIndex >= 0 ? symbolIndex + 1 : 1;
+  const preview = decodedPreview.length > 200 ? `${decodedPreview.slice(0, 200)}...` : decodedPreview;
 
   return {
     name,

@@ -34,7 +34,7 @@ export type SearchResultSnapshot = {
 
 export class SearchSession {
   private token = 0;
-  private activeRemoteChannel?: { close(): void };
+  private activeRemoteChannels = new Set<{ close(): void }>();
   private refreshTimer?: NodeJS.Timeout;
   private pendingResultPush = false;
   private pendingResultMode: 'content' | 'file' = 'content';
@@ -80,22 +80,28 @@ export class SearchSession {
 
   public setActiveChannel(channel: { close(): void } | undefined, previous?: { close(): void }): void {
     if (previous) {
-      if (this.activeRemoteChannel === previous) {
-        this.activeRemoteChannel = channel;
+      this.activeRemoteChannels.delete(previous);
+      if (channel) {
+        this.activeRemoteChannels.add(channel);
       }
       return;
     }
-    if (this.activeRemoteChannel && this.activeRemoteChannel !== channel) {
-      this.activeRemoteChannel.close();
+    if (channel) {
+      this.activeRemoteChannels.add(channel);
     }
-    this.activeRemoteChannel = channel;
   }
 
-  public closeActiveChannel(): void {
-    if (this.activeRemoteChannel) {
-      this.activeRemoteChannel.close();
-      this.activeRemoteChannel = undefined;
+  public closeActiveChannel(channel?: { close(): void }): void {
+    if (channel) {
+      this.activeRemoteChannels.delete(channel);
+      channel.close();
+      return;
     }
+    // 未指定通道时关闭并清空全部活动通道（用于单个搜索达到上限截断 / 清场）。
+    for (const active of this.activeRemoteChannels) {
+      active.close();
+    }
+    this.activeRemoteChannels.clear();
   }
 
   public recordMatch(): void {
@@ -212,10 +218,10 @@ export class SearchSession {
     this.pendingResultPush = false;
     this.pendingResultMode = 'content';
     this.stopProgressTimer();
-    if (this.activeRemoteChannel) {
-      this.activeRemoteChannel.close();
-      this.activeRemoteChannel = undefined;
+    for (const active of this.activeRemoteChannels) {
+      active.close();
     }
+    this.activeRemoteChannels.clear();
   }
 
   public dispose(): void {

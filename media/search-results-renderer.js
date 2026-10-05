@@ -17,10 +17,12 @@
       this.escapeHtml = options.escapeHtml;
       this.persistState = options.persistState;
       this.getChevronRight = options.getChevronRight;
-      this.getChevronDown = options.getChevronDown;
-      this.items = [];
-      this.itemByPath = new Map();
-      this.itemIndexByPath = new Map();
+        this.getChevronDown = options.getChevronDown;
+        this.items = [];
+        this.itemByPath = new Map();
+        // 可选：返回当前搜索查询词，供排序做“被查询符号定义优先”。
+        this.getCurrentQuery = options.getCurrentQuery || (() => '');
+        this.itemIndexByPath = new Map();
       this.matchCounts = [];
       this.matchPrefix = [0];
       this.totalHeight = 0;
@@ -41,9 +43,9 @@
     }
 
     replace(items) {
-      const startedAt = performance.now();
-      this.startRenderMeasure(items);
-      this.items = normalizeResultItems(items);
+        const startedAt = performance.now();
+        this.startRenderMeasure(items);
+        this.items = normalizeResultItems(items, this.getCurrentQuery());
       this.itemByPath = new Map(this.items.map((item) => [item.path, item]));
       this.traceRenderPhase('replace-normalize', startedAt, { incomingFiles: Array.isArray(items) ? items.length : 0 });
       this.resultsEl.scrollTop = 0;
@@ -58,7 +60,7 @@
       const startedAt = performance.now();
       this.startRenderMeasure(items);
       const beforePaths = new Set(this.itemByPath.keys());
-      this.items = mergeResultItems(this.items, items, this.itemByPath);
+        this.items = mergeResultItems(this.items, items, this.itemByPath, this.getCurrentQuery());
       this.traceRenderPhase('merge-normalize', startedAt, { incomingFiles: items.length, files: this.items.length });
       let hasNewFile = false;
       for (const item of items) {
@@ -316,8 +318,9 @@
         endColumn: 2,
         preview: file.relativePath
       }));
+      const pathTitle = this.escapeHtml(file.relativePath).replace(/"/g, '&quot;');
       return `<div class="fileVirtualRow ${isFileSearch ? 'fileSearchResult' : ''}">
-        <button class="fileHeader" type="button" ${isFileSearch ? `data-match="${filePayload}"` : `data-toggle-file="${encodeURIComponent(file.path)}"`}>
+        <button class="fileHeader" type="button" title="${pathTitle}" ${isFileSearch ? `data-match="${filePayload}"` : `data-toggle-file="${encodeURIComponent(file.path)}"`}>
           <span class="treeIcon" aria-hidden="true">${chevron}</span>
           ${this.renderFileIcon(file.relativePath)}
           <span class="fileName fileNameColor${index % 30}">
@@ -384,12 +387,112 @@
     return items.reduce((total, item) => total + (Array.isArray(item?.matches) ? item.matches.length : 0), 0);
   }
 
-  function normalizeResultItems(items) {
+  // 与后端 src/core/ranking.ts 同构的“文件相关性”比较器：让源码实现排在
+  // 测试/示例/mock/兼容垫片之前，替代按路径字母序平铺。
+  const TEST_DIR_RE = /(?:^|\/)(?:tests?|__tests__|spec|testing|unittest|unittests|testdata|fixtures?)(?:\/|$)/i;
+  // 测试文件：覆盖 test_foo / foo_test / foo.test / foo_spec / FooTest / foo_suite /
+  // test_helpers 等常见命名（与后端 ranking.ts 同构）。
+  const TEST_FILE_RE =
+    /(?:^|\/)(?:[^/]*(?:_test|\.test|\.spec|_spec|Tests?|_suite|Suite|_helper|Helper)\.[^/]+|test_[^/]+\.[^/]+|test_helpers?[^/]*\.[^/]+)(?:\/|$)/i;
+  const MOCK_RE = /(?:^|\/)(?:[^/]*\.?mock[^/]*|[^/]*\.?stub[^/]*|[^/]*\.?fake[^/]*)(?:\/|$)/i;
+  const EXAMPLE_RE = /(?:^|\/)(?:examples?|samples?|demos?)(?:\/|$)/i;
+  const COMPAT_RE = /(?:^|\/)(?:compat|_compat|legacy|_legacy|old|deprecated)(?:\/|$)/i;
+  // re-export / 包元数据文件：含类型信息但通常只是转发，命中价值低于实现文件。
+  const REEXPORT_RE =
+    /(?:^|\/)(?:__init__|package-info|barrel)\.(?:py|java|js|ts|mjs|cjs|jsx|tsx)$/i;
+  const DECL_RE = /\.d\.ts$/i;
+  const MIN_RE = /\.min\.(?:js|css)$/i;
+  const GENERATED_RE = /(?:^|\/)generated(?:\/|$)/i;
+  const BUILD_DIR_RE = /(?:^|\/)(?:dist|build|out|target|\.next)(?:\/|$)/i;
+  const NODE_MODULES_RE = /(?:^|\/)node_modules(?:\/|$)/i;
+  const PATH_PENALTIES = [
+    { re: TEST_DIR_RE, factor: 0.2 },
+    { re: TEST_FILE_RE, factor: 0.2 },
+    { re: REEXPORT_RE, factor: 0.5 },
+    { re: MOCK_RE, factor: 0.3 },
+    { re: EXAMPLE_RE, factor: 0.3 },
+    { re: COMPAT_RE, factor: 0.3 },
+    { re: DECL_RE, factor: 0.5 },
+    { re: MIN_RE, factor: 0.5 },
+    { re: GENERATED_RE, factor: 0.5 },
+    { re: BUILD_DIR_RE, factor: 0.3 },
+    { re: NODE_MODULES_RE, factor: 0.2 }
+  ];
+  const DEFINITION_KEYWORD_RE = /(?:^|[^\w])(?:class|struct|enum|interface|typedef|namespace|module|trait|record|def|fn|func|function|proc|#define)(?:\s+|\(|:)/i;
+  const DEFINITION_BOOST = 0.2;
+  // “被查询符号的定义”额外提升：定义行同时包含被查符号时优先级最高。
+  const SYMBOL_DEFINITION_BOOST = 0.35;
+  const MATCH_BOOST_MAX = 0.1;
+  const MATCH_BOOST_MIN_COUNT = 2;
+  const MATCH_BOOST_MAX_COUNT = 8;
+
+  function computeFileRank(relativePath) {
+    const normalized = String(relativePath).replace(/\\/g, '/');
+    let rank = 1.0;
+    for (const penalty of PATH_PENALTIES) {
+      if (penalty.re.test(normalized)) {
+        rank *= penalty.factor;
+      }
+    }
+    return rank;
+  }
+
+  function isDefinitionLine(preview) {
+    return DEFINITION_KEYWORD_RE.test(String(preview));
+  }
+
+  function isSymbolDefinitionLine(preview, query) {
+    const symbol = String(query || '').trim();
+    if (!symbol) {
+      return false;
+    }
+    return isDefinitionLine(preview) && String(preview).includes(symbol);
+  }
+
+  function computeMatchBoost(matchCount) {
+    if (matchCount < MATCH_BOOST_MIN_COUNT) {
+      return 0;
+    }
+    const capped = Math.min(matchCount, MATCH_BOOST_MAX_COUNT);
+    return (MATCH_BOOST_MAX * (capped - MATCH_BOOST_MIN_COUNT + 1)) /
+      (MATCH_BOOST_MAX_COUNT - MATCH_BOOST_MIN_COUNT + 1);
+  }
+
+  function computeFileScore(item, query) {
+    const base = computeFileRank(item?.relativePath || item?.path || '');
+    if (base !== 1.0) {
+      return base;
+    }
+    const matches = Array.isArray(item?.matches) ? item.matches : [];
+    let score = base;
+    const symbol = String(query || '').trim();
+    const hasSymbolDefinition = symbol
+      ? matches.some((match) => isSymbolDefinitionLine(match?.preview, symbol))
+      : false;
+    const hasDefinition = matches.some((match) => isDefinitionLine(match?.preview));
+    if (hasSymbolDefinition) {
+      score += SYMBOL_DEFINITION_BOOST;
+    } else if (hasDefinition) {
+      score += DEFINITION_BOOST;
+    }
+    score += computeMatchBoost(matches.length);
+    return score;
+  }
+
+  function compareSearchFiles(left, right, query) {
+    const scoreDiff = computeFileScore(right, query) - computeFileScore(left, query);
+    if (scoreDiff !== 0) {
+      return scoreDiff;
+    }
+    return String(left?.relativePath || left?.path || '').localeCompare(String(right?.relativePath || right?.path || ''));
+  }
+
+  function normalizeResultItems(items, query) {
     if (!Array.isArray(items)) {
       return [];
     }
     return items.map((item) => normalizeResultItem(item))
-      .sort((left, right) => String(left.relativePath).localeCompare(String(right.relativePath)));
+      .sort((left, right) => compareSearchFiles(left, right, query));
   }
 
   function normalizeResultItem(item) {
@@ -403,10 +506,10 @@
     };
   }
 
-  function mergeResultItems(currentItems, changedItems, byPath) {
-    const resultByPath = byPath instanceof Map ? byPath : new Map(normalizeResultItems(currentItems).map((item) => [item.path, item]));
+  function mergeResultItems(currentItems, changedItems, byPath, query) {
+    const resultByPath = byPath instanceof Map ? byPath : new Map(normalizeResultItems(currentItems, query).map((item) => [item.path, item]));
     let addedFile = false;
-    for (const item of normalizeResultItems(changedItems)) {
+    for (const item of normalizeResultItems(changedItems, query)) {
       const existing = resultByPath.get(item.path);
       if (existing) {
         Object.assign(existing, mergeResultItem(existing, item));
@@ -420,7 +523,7 @@
       return currentItems;
     }
     return Array.from(resultByPath.values())
-      .sort((left, right) => String(left.relativePath).localeCompare(String(right.relativePath)));
+      .sort((left, right) => compareSearchFiles(left, right, query));
   }
 
   function mergeResultItem(existing, changed) {

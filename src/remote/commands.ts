@@ -30,7 +30,8 @@ export function buildFileSearchGlobArgs(fileQuery: string, caseSensitive: boolea
 }
 
 function escapeGlobLiteral(value: string): string {
-  return value.replace(/[\\*?[\]]/gu, (char) => `\\${char}`);
+  // 花括号也是 rg glob 的备选组元字符（{a,b}），同样需按字面量转义。
+  return value.replace(/[\\*?[\]{}]/gu, (char) => `\\${char}`);
 }
 
 export function buildGitTopCommand(remoteCwd: string): string {

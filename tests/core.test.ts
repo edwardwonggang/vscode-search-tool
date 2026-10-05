@@ -494,6 +494,12 @@ test('content and file search args preserve rg flag behavior', () => {
       '--context',
       '2',
       '--glob',
+      '!tags',
+      '--glob',
+      '!tags.tmp',
+      '--glob',
+      '!tags.meta.json',
+      '--glob',
       '**/*.ts',
       '--glob',
       '!**/dist/**',
@@ -511,6 +517,12 @@ test('content and file search args preserve rg flag behavior', () => {
       '--line-buffered',
       '--hidden',
       '--no-ignore-vcs',
+      '--glob',
+      '!tags',
+      '--glob',
+      '!tags.tmp',
+      '--glob',
+      '!tags.meta.json',
       '--glob',
       '**/*.ts',
       '--glob',
@@ -534,6 +546,12 @@ test('content and file search args preserve rg flag behavior', () => {
       '--line-buffered',
       '--hidden',
       '--no-ignore-vcs',
+      '--glob',
+      '!tags',
+      '--glob',
+      '!tags.tmp',
+      '--glob',
+      '!tags.meta.json',
       '--glob',
       '!fw/**',
       '--glob',
@@ -670,12 +688,31 @@ test('ripgrep diagnostics ignore permission denied lines without hiding other fa
 });
 
 test('remote connection signature changes only when SSH identity changes', () => {
+  // 不指定 workspaceId 时使用'default'作为默认值
   const first = getRemoteConnectionSignature(baseSettings({ remoteSearchPath: '/repo-a' }));
   const second = getRemoteConnectionSignature(baseSettings({ remoteSearchPath: '/repo-b' }));
   const third = getRemoteConnectionSignature(baseSettings({ remotePassword: 'different' }));
 
   assert.equal(first, second);
   assert.notEqual(first, third);
+});
+
+test('remote connection signature includes workspaceId to isolate multi-window connections', () => {
+  const sameWorkspace = getRemoteConnectionSignature(baseSettings({ remoteSearchPath: '/repo-a' }), 'ws-123');
+  const differentWorkspace = getRemoteConnectionSignature(baseSettings({ remoteSearchPath: '/repo-a' }), 'ws-456');
+  const defaultWorkspace = getRemoteConnectionSignature(baseSettings({ remoteSearchPath: '/repo-a' }));
+
+  // 相同 SSH 配置但不同 workspaceId 应该有不同的签名
+  assert.notEqual(sameWorkspace, differentWorkspace);
+  // 不指定 workspaceId 时使用'default'
+  assert.ok(defaultWorkspace.includes('"workspaceId":"default"'));
+  // 验证 workspaceId 确实在签名中
+  const parsedSame = JSON.parse(sameWorkspace);
+  const parsedDifferent = JSON.parse(differentWorkspace);
+  assert.equal(parsedSame.host, parsedDifferent.host);
+  assert.equal(parsedSame.workspaceId, 'ws-123');
+  assert.equal(parsedDifferent.workspaceId, 'ws-456');
+  assert.notEqual(parsedSame.workspaceId, parsedDifferent.workspaceId);
 });
 
 test('ctags tag lines parse symbol, path, line, and preview', () => {
