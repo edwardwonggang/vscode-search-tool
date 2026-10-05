@@ -286,22 +286,22 @@ export class SearchCoordinator {
 
     if (plan.mode === 'definition') {
       this.logger.log(`search#${token} definition-mode query="${plan.query}"`);
-      for (let index = 0; index < repositories.length; index += 1) {
-        if (!this.session.isCurrent(token)) {
-          return;
-        }
-        const ok = await this.definitionSearch.execute(
-          token,
-          options,
-          settings,
-          repositories[index],
-          messageRouter,
-          index === repositories.length - 1,
-          startedAt
-        );
-        if (!ok) {
-          return;
-        }
+      // 与右键“转到定义”一致：多 Git 根并行探针+扫描共享同一 SSH 连接，
+      // 总耗时从串行累加降为最慢仓库。全部完成后统一收尾推送 summary。
+      const results = await Promise.all(repositories.map((repository) => this.definitionSearch.execute(
+        token,
+        options,
+        settings,
+        repository,
+        messageRouter,
+        false,
+        startedAt
+      )));
+      if (!this.session.isCurrent(token)) {
+        return;
+      }
+      if (results.every(Boolean)) {
+        await this.definitionSearch.finalizeSearch(startedAt);
       }
       this.logger.log(`search#${token} definition-search completed`);
       return;

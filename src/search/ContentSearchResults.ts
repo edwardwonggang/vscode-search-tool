@@ -64,6 +64,7 @@ export function addContentSearchMatch(input: AddContentMatchOptions): number {
   }
 
   if (submatches.length > 0) {
+    input.resultStore.recordAppendedMatches(submatches.length);
     input.resultStore.markDirty(target.uriString);
   }
 

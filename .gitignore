@@ -13,3 +13,6 @@ Thumbs.db
 
 # Redundant with extracted `ripgrep-*-musl/` (fetch separately if needed)
 assets/bin/ripgrep-linux.tar.gz
+
+# 本地调试/诊断产物，不入库
+error.txt

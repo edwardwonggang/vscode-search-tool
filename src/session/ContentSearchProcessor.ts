@@ -66,6 +66,7 @@ export class ContentSearchProcessor {
       });
     }
     if (submatches.length > 0) {
+      resultStore.recordAppendedMatches(submatches.length);
       resultStore.markDirty(target.uriString);
     }
 

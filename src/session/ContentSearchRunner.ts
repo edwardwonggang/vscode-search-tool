@@ -23,6 +23,8 @@ export type ContentSearchConfig = {
   threads: number;
   resultRefreshMs: number;
   definitionExcludeGlobs: string[];
+  /** 匹配总数上限，达到后关闭远端通道停止流式输出；0 表示不限制。 */
+  maxResults: number;
 };
 
 export class ContentSearchRunner {
@@ -48,6 +50,10 @@ export class ContentSearchRunner {
   ): Promise<boolean> {
     const startedAt = searchStartedAt;
     let totalMatches = 0;
+    const query = options.query.trim();
+    this.resultStore.setQuery(query);
+    const maxResults = this.config.maxResults;
+    let truncated = false;
     const remoteCwd = repository.remoteCwd;
     const args = buildContentSearchArgs(options, settings, {
       contextLines: this.config.contextLines,
@@ -56,7 +62,7 @@ export class ContentSearchRunner {
     const resultPathFilter = createResultPathFilter(options, settings);
 
     this.logger.log(`search#${token} start`);
-    this.logger.log(`search#${token} mode=remote query="${options.query.trim()}"`);
+    this.logger.log(`search#${token} mode=remote query="${query}"`);
     this.logger.log(`search#${token} requestId=${options.requestId ?? 'none'} trigger=${options.triggerSource ?? 'unknown'}`);
     this.logger.log(`search#${token} repository="${repository.workspaceRelativePath || '.'}" remote cwd="${remoteCwd}"`);
     this.session.postPhase('Connecting to SSH...');
@@ -76,9 +82,36 @@ export class ContentSearchRunner {
 
       let parsedLines = 0;
       let parseErrors = 0;
+      let skippedLines = 0;
+      // 同一文件命中多行时复用已构建的 target（Uri/路径拼接），避免每行重建。
+      const targetCache = new Map<string, ReturnType<ContentSearchRunner['createTarget']>>();
+      const createCachedTarget = (remoteRelativePath: string) => {
+        let target = targetCache.get(remoteRelativePath);
+        if (!target) {
+          target = this.createTarget(repository, remoteRelativePath);
+          targetCache.set(remoteRelativePath, target);
+        }
+        return target;
+      };
+      // include/exclude glob 判定同样按文件缓存：同一文件的每个匹配行结果一致。
+      const filterCache = new Map<string, boolean>();
+      const cachedPathFilter = (relativePath: string): boolean => {
+        let allowed = filterCache.get(relativePath);
+        if (allowed === undefined) {
+          allowed = resultPathFilter(relativePath);
+          filterCache.set(relativePath, allowed);
+        }
+        return allowed;
+      };
       const lineBuffer = new StreamingLineProcessor({
-        shouldContinue: () => this.session.isCurrent(token),
+        shouldContinue: () => this.session.isCurrent(token) && !truncated,
         onLine: (line) => {
+          // rg --json 的键序固定（type 在前），begin/end/context/summary 事件行
+          // 用一次字符串前缀比较跳过，省掉 JSON.parse。
+          if (truncated || !line.startsWith('{"type":"match"')) {
+            skippedLines += 1;
+            return;
+          }
           let entry: ContentSearchEntry;
           try {
             entry = JSON.parse(line) as ContentSearchEntry;
@@ -92,8 +125,8 @@ export class ContentSearchRunner {
           }
           const addedMatches = ContentSearchProcessor.processLine(
             entry,
-            resultPathFilter,
-            (remoteRelativePath) => this.createTarget(repository, remoteRelativePath),
+            cachedPathFilter,
+            createCachedTarget,
             this.resultStore
           );
           if (addedMatches > 0) {
@@ -105,6 +138,13 @@ export class ContentSearchRunner {
               this.session.startProgress('content');
             }
             this.session.scheduleResultPush('content');
+            if (maxResults > 0 && this.resultStore.totalMatches() >= maxResults) {
+              // 达到上限：关闭远端通道让 rg 收到 SIGPIPE 停止（exit 141 已被忽略），
+              // 剩余已缓冲行由 truncated 标志丢弃。
+              truncated = true;
+              this.logger.log(`search#${token} reached maxResults=${maxResults}; closing remote stream`);
+              this.session.closeActiveChannel();
+            }
           }
         }
       });
@@ -116,7 +156,7 @@ export class ContentSearchRunner {
         this.session.startProgress('content');
       }
       await lineBuffer.flush();
-      this.logger.log(`search#${token} stream lines=${parsedLines} parseErrors=${parseErrors} stats=${JSON.stringify(lineBuffer.stats)}`);
+      this.logger.log(`search#${token} stream lines=${parsedLines} skipped=${skippedLines} parseErrors=${parseErrors} stats=${JSON.stringify(lineBuffer.stats)}`);
       if (!this.session.isCurrent(token)) {
         return false;
       }
@@ -136,7 +176,7 @@ export class ContentSearchRunner {
         this.session.postState({
           type: 'state',
           running: false,
-          summary: this.buildSummary(Date.now() - startedAt, this.resultStore.totalMatches()),
+          summary: this.buildSummary(Date.now() - startedAt, this.resultStore.totalMatches(), truncated),
           elapsedMs: Date.now() - startedAt
         });
         return true;
@@ -162,7 +202,7 @@ export class ContentSearchRunner {
       this.session.stopProgress();
 
       const elapsedMs = Date.now() - startedAt;
-      const summary = this.buildSummary(elapsedMs, this.resultStore.totalMatches());
+      const summary = this.buildSummary(elapsedMs, this.resultStore.totalMatches(), truncated);
       this.session.postState({ type: 'state', running: false, summary, elapsedMs });
       return true;
     } catch (error) {
@@ -209,10 +249,12 @@ export class ContentSearchRunner {
     return lastResult;
   }
 
-  private buildSummary(elapsedMs: number, totalMatches: number): string {
+  private buildSummary(elapsedMs: number, totalMatches: number, truncated = false): string {
     const fileCount = this.resultStore.size;
-    return totalMatches === 0
-      ? `No results (${elapsedMs} ms)`
-      : `${fileCount} files, ${totalMatches} results (${elapsedMs} ms)`;
+    if (totalMatches === 0) {
+      return `No results (${elapsedMs} ms)`;
+    }
+    const suffix = truncated ? '+ (truncated)' : '';
+    return `${fileCount} files, ${totalMatches}${suffix} results (${elapsedMs} ms)`;
   }
 }

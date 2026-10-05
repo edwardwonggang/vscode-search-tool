@@ -1,3 +1,5 @@
+import { compareSearchFiles } from '../core/ranking';
+
 export type WebviewMessage =
   | { type: 'bootstrap'; payload: BootstrapPayload }
   | { type: 'results'; payload: SearchResultPayload }
@@ -160,7 +162,7 @@ export function mergeResultItems(
     const existing = byPath.get(item.path);
     byPath.set(item.path, existing ? mergeResultItem(existing, item) : normalizeNewResultItem(item));
   }
-  return Array.from(byPath.values()).sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+  return Array.from(byPath.values()).sort(compareSearchFiles);
 }
 
 function mergeResultItem(

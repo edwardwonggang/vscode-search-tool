@@ -8,6 +8,9 @@ export type DefinitionLocationData = {
   legacyPath: string;
   line: number;
   column: number;
+  endColumn: number;
+  preview: string;
+  symbolName: string;
 };
 
 /**
@@ -30,7 +33,10 @@ export function buildDefinitionLocations(matches: SearchMatch[]): DefinitionLoca
       uri: match.uri ?? '',
       legacyPath: match.path,
       line: match.line,
-      column: match.column
+      column: match.column,
+      endColumn: match.endColumn,
+      preview: match.preview,
+      symbolName: match.symbolName ?? ''
     });
   }
   return locations;

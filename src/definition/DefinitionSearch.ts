@@ -23,7 +23,8 @@ import {
   buildCtagsRebuildCommand,
   buildGitHeadCommand,
   createTagIndexMeta,
-  getTagIndexPaths
+  decideTagIndexRefresh,
+  getTagIndexPaths,
 } from './TagIndex';
 const CTAGS_PROGRESS_REFRESH_MS = 500;
 
@@ -59,6 +60,7 @@ export class DefinitionSearch {
     const query = options.query.trim();
     const startedAt = searchStartedAt;
     const remoteCwd = repository.remoteCwd;
+    this.resultStore.setQuery(query);
     this.logger.log(`def-search#${token} start query="${query}" cwd="${remoteCwd}" session.current=${this.session.currentToken}`);
     this.logger.log(`def-search#${token} requestId=${options.requestId ?? 'none'} trigger=${options.triggerSource ?? 'unknown'}`);
     const definitionPathFilter = this.createResultPathFilter(options, settings);
@@ -120,10 +122,32 @@ export class DefinitionSearch {
       );
       this.logger.log(`def-search#${token} gitTop="${gitTop}"`);
 
-      const tagsPath = getTagIndexPaths(gitTop).tagsPath;
+      const tagIndexPaths = getTagIndexPaths(gitTop);
+      const tagsPath = tagIndexPaths.tagsPath;
       this.logger.log(`def-search#${token} tagsPath=${tagsPath}`);
-      if (!probe.tagsExists) {
-        this.logger.log(`def-search#${token} running ctags build`);
+
+      // tags 缺失或元数据过期（git HEAD/ctags 版本/参数指纹/schema 变更）时
+      // 重建索引，避免用旧索引查不到新定义。时间间隔刷新交给后台自动刷新，
+      // 查询路径不因旧索引额外触发全量重建，兼顾准确度与跳转速度。
+      let needsRebuild = !probe.tagsExists;
+      let staleReason = 'tags-missing';
+      if (!needsRebuild) {
+        // meta 已在合并探针中随 tags 一同读取，无需额外远端往返。
+        const decision = decideTagIndexRefresh({
+          tagsExists: true,
+          meta: probe.meta,
+          gitTop,
+          gitHead: probe.gitHead,
+          ctagsVersion: probe.ctagsVersion,
+          ctagsArgsKey: TAG_INDEX_CTAGS_ARGS_KEY,
+          refreshIntervalMs: 0,
+          nowMs: Date.now()
+        });
+        needsRebuild = decision.refresh;
+        staleReason = decision.reason;
+      }
+      if (needsRebuild) {
+        this.logger.log(`def-search#${token} running ctags build reason=${staleReason}`);
         this.session.postPhase('Checking remote ctags...');
         const ctagsPath = await this.remoteToolInstaller.ensureCtags(
           client,
@@ -162,16 +186,8 @@ export class DefinitionSearch {
       if (!finalize) {
         return true;
       }
-      this.session.stopProgress();
-
       this.logger.log(`def-search#${token} done store size=${this.resultStore.size} total=${this.resultStore.totalMatches()}`);
-      const elapsedMs = Date.now() - startedAt;
-      const fileCount = this.resultStore.size;
-      const total = this.resultStore.totalMatches();
-      const summary = total === 0
-        ? (await this.translationService.translate('def_no_results')) + ` (${elapsedMs} ms)`
-        : `${fileCount} files, ${total} results (${elapsedMs} ms)`;
-      this.session.postState({ type: 'state', running: false, summary, elapsedMs, ctagsInProgress: false });
+      await this.finalizeSearch(startedAt);
       return true;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -188,23 +204,34 @@ export class DefinitionSearch {
     return createDefinitionResultPathFilter(options, settings, this.config.definitionExcludeGlobs);
   }
 
+  /** 侧边栏定义搜索的收尾：停止进度并推送最终 summary。多仓库并行时由协调方在全部完成后调用一次。 */
+  public async finalizeSearch(startedAt: number): Promise<void> {
+    this.session.stopProgress();
+    const elapsedMs = Date.now() - startedAt;
+    const fileCount = this.resultStore.size;
+    const total = this.resultStore.totalMatches();
+    const summary = total === 0
+      ? (await this.translationService.translate('def_no_results')) + ` (${elapsedMs} ms)`
+      : `${fileCount} files, ${total} results (${elapsedMs} ms)`;
+    this.session.postState({ type: 'state', running: false, summary, elapsedMs, ctagsInProgress: false });
+  }
+
   private parseTagResultLine(
     line: string,
     query: string,
     repository: ResolvedSearchRepository,
     tagsBaseRemote: string
   ): SearchMatch | null {
-    this.logger.debug(`parseTagResultLine query="${query}" line="${line.substring(0, 80)}..."`);
+    // 注意：此处不打 per-line debug 日志——模板字符串在调用前求值，
+    // tags 匹配块大时即使 verboseLogging 关闭也会白拼大量字符串。
     const parsed = parseTagLine(line, query, tagsBaseRemote);
     if (!parsed) {
-      this.logger.debug('parseTagResultLine skipped: no ctags match');
       return null;
     }
     let target;
     try {
       target = this.createTargetFromRemotePath(repository, parsed.remoteFileAbs);
-    } catch (error) {
-      this.logger.debug(`parseTagResultLine skipped: ${error instanceof Error ? error.message : String(error)}`);
+    } catch {
       return null;
     }
     return {

@@ -1,4 +1,5 @@
 import { shellEscape } from '../core/shell';
+import { parseTagIndexMeta, type TagIndexMeta } from './TagIndex';
 
 export const TAG_PROBE_PREFIX = 'PROBE:';
 export const TAG_PROBE_CD_FAIL_LINE = 'PROBE:cd=fail';
@@ -10,6 +11,8 @@ export type TagProbeResult = {
   ctagsVersion: string;
   tagsExists: boolean;
   gitHead: string;
+  /** tags.meta.json 解析结果；tags 不存在或元数据缺失/损坏时为 undefined。 */
+  meta?: TagIndexMeta;
 };
 
 /**
@@ -24,6 +27,7 @@ export function buildTagProbeCommand(remoteCwd: string, rgPath: string, ctagsPat
     `inside=$(git rev-parse --is-inside-work-tree 2>/dev/null) || inside=""`,
     `head=$(test -n "$top" && git -C "$top" rev-parse HEAD 2>/dev/null) || head=""`,
     `if test -n "$top" && test -f "$top/tags"; then tags=y; else tags=n; fi`,
+    `if test "$tags" = y && test -f "$top/tags.meta.json"; then printf 'PROBE:meta=%s\\n' "$(cat "$top/tags.meta.json" 2>/dev/null)"; fi`,
     `rgv=$(${shellEscape(rgPath)} --version 2>/dev/null | head -n 1) || rgv=""`,
     `ctv=$(${shellEscape(ctagsPath)} --version 2>/dev/null | head -n 1) || ctv=""`,
     `printf 'PROBE:gitTop=%s\\nPROBE:insideWorkTree=%s\\nPROBE:rgVersion=%s\\nPROBE:ctagsVersion=%s\\nPROBE:tags=%s\\nPROBE:gitHead=%s\\n' "$top" "$inside" "$rgv" "$ctv" "$tags" "$head"`
@@ -58,6 +62,7 @@ export function parseTagProbe(output: string): TagProbeResult | undefined {
     rgVersion: values.rgVersion ?? '',
     ctagsVersion: values.ctagsVersion ?? '',
     tagsExists: (values.tags ?? 'n') === 'y',
-    gitHead: values.gitHead ?? ''
+    gitHead: values.gitHead ?? '',
+    meta: parseTagIndexMeta(values.meta ?? '')
   };
 }
