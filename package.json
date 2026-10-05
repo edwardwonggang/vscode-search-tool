@@ -117,7 +117,7 @@
     "package": "npm run build && npx @vscode/vsce package --no-dependencies --allow-missing-repository",
     "context": "C:\\Users\\10297441.WIN-9DOP5T7GHM7\\.codex\\tools\\context-pack\\context-pack.cmd",
     "context:changed": "C:\\Users\\10297441.WIN-9DOP5T7GHM7\\.codex\\tools\\context-pack\\context-pack.cmd --changed",
-    "test": "tsc -p tsconfig.test.json && node --test out-test/tests/core.test.js out-test/tests/definition.test.js out-test/tests/renderer.test.js",
+    "test": "tsc -p tsconfig.test.json && node --test out-test/tests/core.test.js out-test/tests/definition.test.js out-test/tests/renderer.test.js out-test/tests/symbolExtraction.test.js out-test/tests/symbolFallbackSearch.test.js",
     "update": "node scripts/update-extension.mjs",
     "git:register": "node scripts/local-git-register.mjs",
     "git:web": "node scripts/local-git-web.mjs",

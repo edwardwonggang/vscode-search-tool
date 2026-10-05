@@ -9,6 +9,8 @@ export const TAG_INDEX_SCHEMA_VERSION = 2;
 export const TAG_INDEX_SAMPLE_BYTES = 1048576;
 export const TAG_INDEX_CTAGS_ARGS_KEY = '--sort=yes --tag-relative=yes --fields=+n --c-kinds=+defgmpstuv --c++-kinds=+cdefgmpstuv --exclude=tags --exclude=tags.tmp --exclude=tags.meta.json --exclude=tags.sidx* sparse-index-v1';
 export const DEFAULT_TAG_AUTO_REFRESH_MINUTES = 30;
+/** 工作区有未提交改动时，距上次索引构建至少超过该时长（毫秒）才触发重建，避免每次编辑都全量重建。 */
+export const DEFAULT_DIRTY_REFRESH_MS = 30000;
 
 export const CTAGS_EXCLUDE_PATTERNS = [
   '*.a',
@@ -63,6 +65,10 @@ export type TagIndexRefreshInput = {
   ctagsArgsKey: string;
   refreshIntervalMs: number;
   nowMs: number;
+  /** 工作区是否存在未提交改动（git 工作区脏）。缺省视为无改动。 */
+  workspaceDirty?: boolean;
+  /** 工作区脏时允许触发重建的阈值（毫秒），缺省用 DEFAULT_DIRTY_REFRESH_MS；<=0 表示不因 dirty 重建。 */
+  dirtyRefreshMs?: number;
 };
 
 export type TagIndexRefreshDecision = {
@@ -148,6 +154,14 @@ export function decideTagIndexRefresh(input: TagIndexRefreshInput): TagIndexRefr
   }
   if (input.refreshIntervalMs > 0 && input.nowMs - input.meta.builtAtMs >= input.refreshIntervalMs) {
     return { refresh: true, reason: 'refresh-interval' };
+  }
+  // 工作区有未提交改动时，新写代码（未 commit）的符号在旧索引里查不到。
+  // 用独立阈值 dirtyRefreshMs 节流，避免每次编辑都触发全量重建；默认 30 秒后仍脏才重建。
+  if (input.workspaceDirty) {
+    const dirtyMs = input.dirtyRefreshMs ?? DEFAULT_DIRTY_REFRESH_MS;
+    if (dirtyMs > 0 && input.nowMs - input.meta.builtAtMs >= dirtyMs) {
+      return { refresh: true, reason: 'workspace-dirty' };
+    }
   }
   return { refresh: false, reason: 'fresh' };
 }
