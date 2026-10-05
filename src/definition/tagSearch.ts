@@ -55,7 +55,7 @@ function buildTagScanBlock(tagsPathArg: string, sidxPathArg: string, query: stri
   // 残行，读取窗口统一多取 2 块并跳过首行以覆盖边界。
   const sidxFallback = [
     `if test -f ${sidxPathArg}; then`,
-    `  block=$(LC_ALL=C awk -F '\\t' -v q=${escapedQuery} '$2<=q{last=$1} $2>q{print last; exit} END{if(last!="")print last}' ${sidxPathArg})`,
+    `  block=$(LC_ALL=C awk -F '\\t' -v q=${escapedQuery} '$2<=q{last=$1; next} $2>q{print last; printed=1; exit} END{if(!printed && last!="")print last}' ${sidxPathArg})`,
     `  if test -n "$block"; then`,
     `    start=$((block * ${TAG_INDEX_SAMPLE_BYTES}))`,
     `    count=$((3 * ${TAG_INDEX_SAMPLE_BYTES}))`,

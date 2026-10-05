@@ -14,6 +14,7 @@ import { SearchSession } from './SearchSession';
 import { ConnectionController } from './ConnectionController';
 import { SearchCoordinator } from './SearchCoordinator';
 import { TagIndexAutoRefresh } from '../definition/TagIndexAutoRefresh';
+import { QuickFileSearch } from '../search/QuickFileSearch';
 
 const DEFAULT_REMOTE_RG_PATH = '/tmp/ripgreptool-rg';
 const DEFAULT_REMOTE_CTAGS_PATH = '/tmp/ripgreptool-ctags';
@@ -40,6 +41,7 @@ export type Services = {
   connectionController: ConnectionController;
   searchCoordinator: SearchCoordinator;
   tagIndexAutoRefresh: TagIndexAutoRefresh;
+  quickFileSearch: QuickFileSearch;
 };
 
 export function createServices(context: ExtensionContext): Services {
@@ -51,7 +53,11 @@ export function createServices(context: ExtensionContext): Services {
   const messageRouter = new WebviewMessageRouter();
   const config = vscode.workspace.getConfiguration('ripgrepTool');
   const resultRefreshMs = Math.max(4, config.get<number>('resultRefreshMs', 80));
-  const definitionExcludeGlobs = config.get<string[]>('definitionExcludeGlobs', DEFAULT_DEFINITION_EXCLUDE_GLOBS);
+  // package.json 的配置 default 与代码默认值保持一致；当用户显式清空数组时回退到内置默认，避免 mock 过滤失效。
+  const configuredExcludeGlobs = config.get<string[]>('definitionExcludeGlobs', DEFAULT_DEFINITION_EXCLUDE_GLOBS);
+  const definitionExcludeGlobs = Array.isArray(configuredExcludeGlobs) && configuredExcludeGlobs.length > 0
+    ? configuredExcludeGlobs
+    : DEFAULT_DEFINITION_EXCLUDE_GLOBS;
   const incrementalTagIndex = config.get<boolean>('incrementalTagIndex', false);
 
   const session = new SearchSession({
@@ -128,6 +134,14 @@ export function createServices(context: ExtensionContext): Services {
     incrementalTagIndex
   );
 
+  const quickFileSearch = new QuickFileSearch({
+    connectionController,
+    workspaceResolver,
+    remoteExecutor,
+    remoteToolInstaller,
+    logger
+  });
+
   return {
     logger,
     settingsStore,
@@ -138,6 +152,7 @@ export function createServices(context: ExtensionContext): Services {
     session,
     connectionController,
     searchCoordinator,
-    tagIndexAutoRefresh
+    tagIndexAutoRefresh,
+    quickFileSearch
   };
 }

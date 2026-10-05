@@ -129,8 +129,9 @@ export class DefinitionSearch {
       this.logger.log(`def-search#${token} tagsPath=${tagsPath}`);
 
       // tags 缺失或元数据过期（git HEAD/ctags 版本/参数指纹/schema 变更）时
-      // 重建索引，避免用旧索引查不到新定义。时间间隔刷新交给后台自动刷新，
-      // 查询路径不因旧索引额外触发全量重建，兼顾准确度与跳转速度。
+      // 重建索引，避免用旧索引查不到新定义。时间间隔刷新与"工作区有未提交
+      // 改动"导致的重建都交给后台自动刷新，查询路径不做同步全量重建——否则
+      // 常驻 dirty 的仓库几乎每次跳转都会现场全量跑 ctags，阻塞定义跳转。
       let needsRebuild = !probe.tagsExists;
       let staleReason = 'tags-missing';
       if (!needsRebuild) {
@@ -143,7 +144,10 @@ export class DefinitionSearch {
           ctagsVersion: probe.ctagsVersion,
           ctagsArgsKey: TAG_INDEX_CTAGS_ARGS_KEY,
           refreshIntervalMs: 0,
-          workspaceDirty: probe.dirty,
+          // 未提交改动里新增的符号由后台自动刷新负责补索引；这里若为 true 会让
+          // 常驻 dirty 的仓库在每次跳转时同步全量重建（mcs 工作区普遍如此），
+          // 导致跳转等待数分钟。新符号查不到时下方已有 rg 精确兜底。
+          workspaceDirty: false,
           nowMs: Date.now()
         });
         needsRebuild = decision.refresh;

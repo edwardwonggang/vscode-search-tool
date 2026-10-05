@@ -12,6 +12,7 @@ import {
   escapeBreString
 } from '../src/definition/tagSearch';
 import {
+  buildCtagsRebuildCommand,
   buildCtagsIncrementalCommand,
   buildSidxAndMetaShellBlock,
   createTagIndexMeta,
@@ -142,6 +143,20 @@ test('buildCtagsIncrementalCommand writes CTAGS_INCREMENTAL:full on too many cha
   assert.ok(cmd.includes("if test \"$count\" -gt 50; then echo 'CTAGS_INCREMENTAL:full'; exit 0; fi"));
 });
 
+test('buildCtagsRebuildCommand joins with newlines so multi-line if blocks stay valid bash', () => {
+  const paths = getTagIndexPaths('/repo');
+  const meta = createTagIndexMeta({ gitTop: '/repo', gitHead: 'abc', ctagsVersion: 'Universal Ctags 6.2.1', ctagsArgsKey: TAG_INDEX_CTAGS_ARGS_KEY });
+  const cmd = buildCtagsRebuildCommand('/tmp/ctags', '/repo', paths, meta);
+  // 以 set -e 开头，任一失败立即退出
+  assert.ok(cmd.startsWith('set -e\n'));
+  // 用换行连接命令，避免 && 把多行 if/for 结构拼成 then && if 的语法错误
+  assert.ok(!cmd.includes(' && if '));
+  assert.ok(!cmd.includes('then &&'));
+  assert.ok(cmd.includes('if command -v split >/dev/null 2>&1; then'));
+  assert.ok(cmd.includes("mv -f \"$indexTmp\" '/repo/tags.sidx' || rm -f '/repo/tags.sidx'"));
+  assert.ok(cmd.includes('metaTmp='));
+});
+
 test('buildSidxAndMetaShellBlock rebuilds sidx and writes meta atomically', () => {
   const paths = getTagIndexPaths('/repo');
   const meta = createTagIndexMeta({ gitTop: '/repo', gitHead: 'abc', ctagsVersion: 'Universal Ctags 6.2.1', ctagsArgsKey: TAG_INDEX_CTAGS_ARGS_KEY });
@@ -151,4 +166,12 @@ test('buildSidxAndMetaShellBlock rebuilds sidx and writes meta atomically', () =
   assert.ok(cmd.includes("mv -f \"$indexTmp\" '/repo/tags.sidx' || rm -f '/repo/tags.sidx'"));
   assert.ok(cmd.includes('metaTmp='));
   assert.ok(cmd.includes("mv -f \"$metaTmp\" '/repo/tags.meta.json'"));
+});
+
+test('sidx block-locate awk does not print the block twice on awk exit', () => {
+  const cmd = buildTagProbeAndSearchCommand('/home/u/proj', '/tmp/rg', '/tmp/ctags', 'BMU_NUM');
+  // awk 的 exit 会执行 END 块，必须用 printed 标志避免 block 号被打印两次，
+  // 否则 $((block * 1048576)) 会因 "596 596" 报 bash 算术语法错误。
+  assert.ok(cmd.includes('$2>q{print last; printed=1; exit} END{if(!printed && last!="")print last}'));
+  assert.ok(cmd.includes('$2<=q{last=$1; next}'));
 });

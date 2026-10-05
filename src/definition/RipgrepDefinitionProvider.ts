@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import type { SearchMatch } from '../core/types';
+import { resolveTargetUri } from '../core/targetUri';
 import { buildDefinitionLocations } from './definitionLocations';
 import { extractSymbolAtLine } from './symbolExtraction';
 import { resolveMatchSelection } from '../search/MatchNavigation';
@@ -40,9 +41,7 @@ export class RipgrepDefinitionProvider implements vscode.DefinitionProvider {
     }
     const locations: vscode.Location[] = [];
     for (const target of buildDefinitionLocations(matches)) {
-      const uri = target.uri
-        ? vscode.Uri.parse(target.uri, true)
-        : vscode.Uri.file(target.legacyPath);
+      const uri = resolveTargetUri(target.uri || undefined, target.legacyPath);
       let position = new vscode.Position(Math.max(0, target.line - 1), Math.max(0, target.column - 1));
       try {
         // 用目标文件实际内容校正行列：ctags 索引可能因本地/远端不同步或长行
