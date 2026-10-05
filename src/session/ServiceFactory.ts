@@ -52,6 +52,7 @@ export function createServices(context: ExtensionContext): Services {
   const config = vscode.workspace.getConfiguration('ripgrepTool');
   const resultRefreshMs = Math.max(4, config.get<number>('resultRefreshMs', 80));
   const definitionExcludeGlobs = config.get<string[]>('definitionExcludeGlobs', DEFAULT_DEFINITION_EXCLUDE_GLOBS);
+  const incrementalTagIndex = config.get<boolean>('incrementalTagIndex', false);
 
   const session = new SearchSession({
     refreshMs: resultRefreshMs,
@@ -123,7 +124,8 @@ export function createServices(context: ExtensionContext): Services {
     translationService,
     remoteExecutor,
     remoteToolInstaller,
-    logger
+    logger,
+    incrementalTagIndex
   );
 
   return {
