@@ -17,6 +17,7 @@ import {
 import {
   DEFAULT_TAG_AUTO_REFRESH_MINUTES,
   TAG_INDEX_CTAGS_ARGS_KEY,
+  buildCtagsIncrementalCommand,
   buildCtagsRebuildCommand,
   buildGitHeadCommand,
   buildReadTagIndexMetaCommand,
@@ -42,7 +43,8 @@ export class TagIndexAutoRefresh {
     private readonly translationService: TranslationService,
     private readonly remoteExecutor: RemoteExecutor,
     private readonly remoteToolInstaller: RemoteToolInstaller,
-    private readonly logger: SessionLogger
+    private readonly logger: SessionLogger,
+    private readonly incrementalTagIndex = false
   ) {}
 
   public refreshIfDue(
@@ -139,19 +141,36 @@ export class TagIndexAutoRefresh {
     }
 
     this.logger.log(`tag auto-refresh start reason=${decision.reason} gitTop=${gitTop}`);
+    const meta = createTagIndexMeta({
+      gitTop,
+      gitHead,
+      ctagsVersion,
+      ctagsArgsKey: TAG_INDEX_CTAGS_ARGS_KEY
+    });
+    // 增量后台索引（借鉴 clangd background index）：仅在"工作区有未提交改动"
+    // 且配置开关开启时，优先只重建变更文件；noop 表示无变更（也算完成），
+    // ok 表示增量成功，其余（full / 非 0 退出）一律回退到下面的全量重建，
+    // 保证任何不确定情况都不会破坏既有索引。
+    if (this.incrementalTagIndex && decision.reason === 'workspace-dirty') {
+      const incr = await this.remoteExecutor.execStreamingWithExitCode(
+        client,
+        buildCtagsIncrementalCommand(ctagsPath, gitTop, paths, meta),
+        {
+          collectStdout: true,
+          timeoutMs: AUTO_BUILD_TIMEOUT_MS
+        }
+      );
+      const incrOut = incr.stdout || '';
+      if (incr.code === 0 && (incrOut.includes('CTAGS_INCREMENTAL:ok') || incrOut.includes('CTAGS_INCREMENTAL:noop'))) {
+        this.nextBuildAt.set(buildKey, Date.now() + AUTO_BUILD_MIN_MS);
+        this.logger.log(`tag auto-refresh done (incremental) elapsed=${Date.now() - startedAt} ms reason=${decision.reason} gitTop=${gitTop}`);
+        return;
+      }
+      this.logger.log(`tag auto-refresh incremental fell back to full code=${incr.code} gitTop=${gitTop}`);
+    }
     const result = await this.remoteExecutor.execStreamingWithExitCode(
       client,
-      buildCtagsRebuildCommand(
-        ctagsPath,
-        gitTop,
-        paths,
-        createTagIndexMeta({
-          gitTop,
-          gitHead,
-          ctagsVersion,
-          ctagsArgsKey: TAG_INDEX_CTAGS_ARGS_KEY
-        })
-      ),
+      buildCtagsRebuildCommand(ctagsPath, gitTop, paths, meta),
       {
         collectStdout: false,
         timeoutMs: AUTO_BUILD_TIMEOUT_MS

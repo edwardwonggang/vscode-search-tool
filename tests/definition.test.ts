@@ -11,6 +11,13 @@ import {
   buildTagSearchCommand,
   escapeBreString
 } from '../src/definition/tagSearch';
+import {
+  buildCtagsIncrementalCommand,
+  buildSidxAndMetaShellBlock,
+  createTagIndexMeta,
+  getTagIndexPaths,
+  TAG_INDEX_CTAGS_ARGS_KEY
+} from '../src/definition/TagIndex';
 
 test('buildTagProbeCommand folds git/rg/ctags/tags checks into one command', () => {
   const cmd = buildTagProbeCommand('/home/u/proj', '/tmp/rg', '/tmp/ctags');
@@ -108,4 +115,40 @@ test('buildTagProbeAndSearchCommand fuses probe with readtags-first scan in one 
 test('escapeBreString escapes only BRE special characters', () => {
   assert.equal(escapeBreString('a.b*c[d]^e$f\\g'), 'a\\.b\\*c\\[d\\]\\^e\\$f\\\\g');
   assert.equal(escapeBreString('plain_name'), 'plain_name');
+});
+
+test('buildCtagsIncrementalCommand collects git changes and skips tags index files', () => {
+  const paths = getTagIndexPaths('/repo');
+  const meta = createTagIndexMeta({ gitTop: '/repo', gitHead: 'abc', ctagsVersion: 'Universal Ctags 6.2.1', ctagsArgsKey: TAG_INDEX_CTAGS_ARGS_KEY });
+  const cmd = buildCtagsIncrementalCommand('/tmp/ctags', '/repo', paths, meta);
+  assert.ok(cmd.includes("cd '/repo'"));
+  assert.ok(cmd.includes('git status --porcelain'));
+  assert.ok(cmd.includes("if test -z \"$changed\"; then echo 'CTAGS_INCREMENTAL:noop'; exit 0; fi"));
+  assert.ok(cmd.includes("grep -q '^CTAGS_FULL$'"));
+  // 局部单文件 ctags 必须用 --tag-relative=no（与全量路径基准一致），排除 tags* 索引文件
+  assert.ok(cmd.includes('--tag-relative=no'));
+  assert.ok(cmd.includes("--exclude='tags'"));
+  assert.ok(cmd.includes("--exclude='tags.sidx*'"));
+  // 合并 + 排序 + sidx + meta
+  assert.ok(cmd.includes('NR==FNR { del[$0]=1'));
+  assert.ok(cmd.includes('LC_ALL=C sort -k1,1'));
+  assert.ok(cmd.includes('CTAGS_INCREMENTAL:ok'));
+});
+
+test('buildCtagsIncrementalCommand writes CTAGS_INCREMENTAL:full on too many changed files', () => {
+  const paths = getTagIndexPaths('/repo');
+  const meta = createTagIndexMeta({ gitTop: '/repo', gitHead: 'abc', ctagsVersion: 'Universal Ctags 6.2.1', ctagsArgsKey: TAG_INDEX_CTAGS_ARGS_KEY });
+  const cmd = buildCtagsIncrementalCommand('/tmp/ctags', '/repo', paths, meta, 50);
+  assert.ok(cmd.includes("if test \"$count\" -gt 50; then echo 'CTAGS_INCREMENTAL:full'; exit 0; fi"));
+});
+
+test('buildSidxAndMetaShellBlock rebuilds sidx and writes meta atomically', () => {
+  const paths = getTagIndexPaths('/repo');
+  const meta = createTagIndexMeta({ gitTop: '/repo', gitHead: 'abc', ctagsVersion: 'Universal Ctags 6.2.1', ctagsArgsKey: TAG_INDEX_CTAGS_ARGS_KEY });
+  const lines = buildSidxAndMetaShellBlock(paths, meta);
+  const cmd = lines.join('\n');
+  assert.ok(cmd.includes("split -b 1048576 -d -a 8 '/repo/tags'"));
+  assert.ok(cmd.includes("mv -f \"$indexTmp\" '/repo/tags.sidx' || rm -f '/repo/tags.sidx'"));
+  assert.ok(cmd.includes('metaTmp='));
+  assert.ok(cmd.includes("mv -f \"$metaTmp\" '/repo/tags.meta.json'"));
 });

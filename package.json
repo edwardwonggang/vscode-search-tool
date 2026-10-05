@@ -108,6 +108,11 @@
           },
           "default": [],
           "description": "Default exclude globs applied to definition search results, including the right-click Go to Definition command."
+        },
+        "ripgrepTool.incrementalTagIndex": {
+          "type": "boolean",
+          "default": false,
+          "description": "When enabled, background tag index refresh rebuilds only changed source files (git diff + local ctags merge, borrowing clangd's background-index idea) instead of the full repository, and falls back to a full rebuild whenever the incremental path is unsafe. Disabled by default; enable only after validating on your remote ctags/readtags environment."
         }
       }
     }
