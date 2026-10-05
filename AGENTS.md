@@ -97,3 +97,18 @@ Documentation vs UI:
 
 VSIX after changes:
 - Before packaging a distributable build, bump `package.json` and keep the top-level `package-lock.json` version aligned. Then run **`npm run package`** to rebuild and refresh the versioned `ripgreptool-<version>.vsix` in the repo root. A newer version should be installed over the existing extension instead of uninstalling first. Do this automatically; do not wait for the user to ask each time. After successful packaging, a short one-line note in the reply is enough; no need to pre-announce every time.
+
+## 增量后台索引（2026-10-05 引入，默认关闭 ripgrepTool.incrementalTagIndex）
+- 借鉴 clangd background index 的"只重建变更"思路，但不引入 clangd/compile_commands.json，
+  完全基于 git + ctags。仅在 workspace-dirty 且配置开关开启时，AutoRefresh 优先走
+  buildCtagsIncrementalCommand 增量重建，ok/noop 视为完成，full/非 0 退出一律回退全量。
+- 关键技术规则（勿改动，否则破坏增量正确性）：
+  - 局部单文件 ctags 必须用 **--tag-relative=no**（相对 cwd=gitTop），才能与全量
+    `ctags -R --tag-relative=yes -f gitTop/tags .` 的 src/*.c 路径格式一致；yes 会对显式
+    文件参数输出意外绝对路径导致合并错乱。
+  - 变更检测用 `git status --porcelain`（非 -z），awk 遇引号路径/重命名(->)/非可打印字符
+    一律输出 CTAGS_INCREMENTAL:full 回退全量；计数 >200 也回退全量。
+  - 合并 = awk NR==FNR 删旧 tags 中变更文件的旧符号 + 追加局部结果 + LC_ALL=C sort -k1,1
+    整体重排（保证 readtags 二分与 tags.sidx 稀疏索引的严格排序不破坏），再重建 sidx/meta。
+- 验证记录：~/.codex/issue-history/2026-10-05-ripgreptool-definition-rootcause-and-clangd.md。
+- 待办：远端真实 ctags/readtags 环境端到端验证后再考虑默认开启。
