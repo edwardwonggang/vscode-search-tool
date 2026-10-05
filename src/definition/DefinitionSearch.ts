@@ -18,6 +18,8 @@ import { StreamingLineProcessor } from '../search/StreamingLineProcessor';
 import { filterRipgrepStderr, isIgnorableRipgrepFailure } from '../session/rgDiagnostics';
 import { TAG_PROBE_PREFIX, parseTagProbe } from './tagProbe';
 import { buildTagProbeAndSearchCommand, buildTagSearchCommand } from './tagSearch';
+import { buildSymbolFallbackSearchCommand } from './symbolFallbackSearch';
+import { ContentSearchProcessor, type ContentSearchEntry } from '../session/ContentSearchProcessor';
 import {
   TAG_INDEX_CTAGS_ARGS_KEY,
   buildCtagsRebuildCommand,
@@ -141,6 +143,7 @@ export class DefinitionSearch {
           ctagsVersion: probe.ctagsVersion,
           ctagsArgsKey: TAG_INDEX_CTAGS_ARGS_KEY,
           refreshIntervalMs: 0,
+          workspaceDirty: probe.dirty,
           nowMs: Date.now()
         });
         needsRebuild = decision.refresh;
@@ -182,6 +185,22 @@ export class DefinitionSearch {
         }
       }
 
+      // ctags 精确匹配无结果时，用 rg 做一次精确单词兜底搜索，避免「明明有定义却提示未找到」。
+      if (finalize && this.resultStore.totalMatches() === 0) {
+        this.logger.log(`def-search#${token} no ctags match, running rg fallback query="${query}"`);
+        this.session.postPhase('Fallback searching symbol with rg...');
+        const fallbackCommand = buildSymbolFallbackSearchCommand(
+          this.remoteToolInstaller.remoteRgPath,
+          gitTop,
+          query,
+          this.config.threads
+        );
+        await this.runSymbolFallbackSearch(client, fallbackCommand, token, repository, definitionPathFilter, startedAt);
+        if (!this.session.isCurrent(token)) {
+          return false;
+        }
+      }
+
       this.session.flushResults();
       if (!finalize) {
         return true;
@@ -214,6 +233,61 @@ export class DefinitionSearch {
       ? (await this.translationService.translate('def_no_results')) + ` (${elapsedMs} ms)`
       : `${fileCount} files, ${total} results (${elapsedMs} ms)`;
     this.session.postState({ type: 'state', running: false, summary, elapsedMs, ctagsInProgress: false });
+  }
+
+  /** 定义搜索无结果时，用 rg 做一次精确单词兜底，复用内容搜索的 JSON 解析写入结果。 */
+  private async runSymbolFallbackSearch(
+    client: Client,
+    command: string,
+    token: number,
+    repository: ResolvedSearchRepository,
+    definitionPathFilter: (relativePath: string) => boolean,
+    startedAt: number
+  ): Promise<void> {
+    let firstResultLogged = false;
+    const createTarget = (remoteFileAbs: string) => {
+      const relativePath = this.getRelativeRemotePath(remoteFileAbs, repository.remoteCwd);
+      if (relativePath === undefined) {
+        throw new Error('Remote path is outside the workspace root.');
+      }
+      return this.workspaceResolver.createWorkspaceTarget(repository, relativePath);
+    };
+    const lineBuffer = new StreamingLineProcessor({
+      shouldContinue: () => this.session.isCurrent(token),
+      onLine: (line) => {
+        if (!this.session.isCurrent(token)) {
+          return;
+        }
+        let entry: ContentSearchEntry;
+        try {
+          entry = JSON.parse(line) as ContentSearchEntry;
+        } catch {
+          return;
+        }
+        try {
+          const added = ContentSearchProcessor.processLine(entry, definitionPathFilter, createTarget, this.resultStore);
+          if (added > 0 && !firstResultLogged) {
+            firstResultLogged = true;
+            this.logger.log(`def-search#${token} fallback first result elapsed=${Date.now() - startedAt} ms`);
+            this.session.startProgress('content');
+          }
+        } catch {
+          // 单行路径映射失败（工作区外等）跳过，不影响整体。
+        }
+        this.session.scheduleResultPush('content');
+      }
+    });
+    const rg = await this.remoteExecutor.execStreamingWithExitCode(client, command, {
+      trackAsActive: true,
+      collectStdout: false,
+      timeoutMs: 0,
+      onStdout: (chunk) => lineBuffer.push(chunk)
+    });
+    if (!firstResultLogged) {
+      this.session.startProgress('content');
+    }
+    await lineBuffer.flush();
+    this.logger.log(`def-search#${token} rg fallback done code=${rg.code} total=${this.resultStore.totalMatches()}`);
   }
 
   private parseTagResultLine(

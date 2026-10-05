@@ -851,6 +851,56 @@ test('tag index refresh decisions build missing tags in the background', () => {
   }), { refresh: true, reason: 'refresh-interval' });
 });
 
+test('tag index refresh rebuilds when workspace is dirty after the threshold', () => {
+  const meta = createTagIndexMeta({
+    gitTop: '/repo',
+    gitHead: 'abc',
+    ctagsVersion: 'Universal Ctags 6.0',
+    ctagsArgsKey: TAG_INDEX_CTAGS_ARGS_KEY
+  }, 1000);
+
+  // 工作区脏但距上次构建不足阈值：不重建（避免每次编辑都全量重建）。
+  assert.deepEqual(decideTagIndexRefresh({
+    tagsExists: true,
+    meta,
+    gitTop: '/repo',
+    gitHead: 'abc',
+    ctagsVersion: 'Universal Ctags 6.0',
+    ctagsArgsKey: TAG_INDEX_CTAGS_ARGS_KEY,
+    refreshIntervalMs: 0,
+    workspaceDirty: true,
+    dirtyRefreshMs: 30000,
+    nowMs: 20000
+  }), { refresh: false, reason: 'fresh' });
+
+  // 工作区脏且超过阈值：重建，否则未提交的新符号在旧索引里查不到。
+  assert.deepEqual(decideTagIndexRefresh({
+    tagsExists: true,
+    meta,
+    gitTop: '/repo',
+    gitHead: 'abc',
+    ctagsVersion: 'Universal Ctags 6.0',
+    ctagsArgsKey: TAG_INDEX_CTAGS_ARGS_KEY,
+    refreshIntervalMs: 0,
+    workspaceDirty: true,
+    dirtyRefreshMs: 30000,
+    nowMs: 40000
+  }), { refresh: true, reason: 'workspace-dirty' });
+
+  // 工作区干净：即使超过阈值也不因 dirty 重建。
+  assert.deepEqual(decideTagIndexRefresh({
+    tagsExists: true,
+    meta,
+    gitTop: '/repo',
+    gitHead: 'abc',
+    ctagsVersion: 'Universal Ctags 6.0',
+    ctagsArgsKey: TAG_INDEX_CTAGS_ARGS_KEY,
+    refreshIntervalMs: 0,
+    workspaceDirty: false,
+    nowMs: 40000
+  }), { refresh: false, reason: 'fresh' });
+});
+
 test('tag index metadata and rebuild command use tmp file then atomic replace', () => {
   const paths = getTagIndexPaths('/home/alice/repo');
   const meta = createTagIndexMeta({

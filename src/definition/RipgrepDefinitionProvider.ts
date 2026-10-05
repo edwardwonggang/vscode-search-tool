@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import type { SearchMatch } from '../core/types';
 import { buildDefinitionLocations } from './definitionLocations';
+import { extractSymbolAtLine } from './symbolExtraction';
 import { resolveMatchSelection } from '../search/MatchNavigation';
 
 /**
@@ -27,9 +28,9 @@ export class RipgrepDefinitionProvider implements vscode.DefinitionProvider {
     if (token.isCancellationRequested) {
       return null;
     }
-    const range = document.getWordRangeAtPosition(position);
-    const symbol = range ? document.getText(range).trim() : '';
-    if (!range || !/^[A-Za-z_][A-Za-z0-9_]*$/u.test(symbol)) {
+    const lineText = document.lineAt(position).text;
+    const symbol = extractSymbolAtLine(lineText, position.character) ?? '';
+    if (!symbol) {
       return null;
     }
 
