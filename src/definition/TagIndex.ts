@@ -36,7 +36,10 @@ export const CTAGS_EXCLUDE_PATTERNS = [
   '*.tgz',
   '*.zip',
   '*.7z',
-  'node_modules'
+  'node_modules',
+  // 单元测试 mock 文件不作为定义跳转目标，在 ctags 索引阶段直接排除
+  '*mock*',
+  '*mock*/**'
 ] as const;
 
 export type TagIndexPaths = {
@@ -292,6 +295,7 @@ export function buildCtagsRebuildCommand(ctagsPath: string, gitTop: string, path
   const indexTmpPath = `${paths.indexPath}.tmp`;
   const indexPartsPath = `${paths.indexPath}.parts`;
   return [
+    `set -e`,
     `cd ${shellEscape(gitTop)}`,
     `rm -f ${shellEscape(paths.tmpPath)}`,
     `${shellEscape(ctagsPath)} -R --sort=yes -f ${shellEscape(paths.tmpPath)} --tag-relative=yes --fields=+n --c-kinds=+defgmpstuv --c++-kinds=+cdefgmpstuv ${excludes} .`,
@@ -325,5 +329,5 @@ export function buildCtagsRebuildCommand(ctagsPath: string, gitTop: string, path
     `metaTmp=${shellEscape(`${paths.metaPath}.tmp`)}.$$`,
     `printf %s ${shellEscape(metaJson)} > "$metaTmp"`,
     `mv -f "$metaTmp" ${shellEscape(paths.metaPath)}`
-  ].join(' && ');
+  ].join('\n');
 }

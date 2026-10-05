@@ -206,22 +206,20 @@ test('default excludes include node_modules', () => {
   assert.equal(filter('lib/source.c'), true);
 });
 
-test('definition path filter excludes mock, cpp, and unittest paths by default', () => {
+test('definition path filter excludes mock paths by default', () => {
   assert.deepEqual(DEFAULT_DEFINITION_EXCLUDE_GLOBS, [
     '**/*mock*',
-    '**/*mock*/**',
-    '**/*.cpp',
-    '**/unittest/**'
+    '**/*mock*/**'
   ]);
   const filter = createDefinitionResultPathFilter(baseOptions(), baseSettings(), DEFAULT_DEFINITION_EXCLUDE_GLOBS);
 
   assert.equal(filter('src/main.h'), true);
   assert.equal(filter('src/main.c'), true);
-  assert.equal(filter('src/main.cpp'), false);
+  assert.equal(filter('src/main.cpp'), true);
   assert.equal(filter('test/mock_util.c'), false);
   assert.equal(filter('test/mock.c'), false);
-  assert.equal(filter('unittest/foo.c'), false);
-  assert.equal(filter('src/unittest/foo.h'), false);
+  assert.equal(filter('unittest/foo.c'), true);
+  assert.equal(filter('src/unittest/foo.h'), true);
   assert.equal(filter('src/unittest_helper.c'), true);
   assert.equal(filter('power/mock_module/main.c'), false);
 });

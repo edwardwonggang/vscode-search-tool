@@ -3,6 +3,7 @@ import { promises as fs } from 'fs';
 import * as path from 'path';
 import { normalizeSettings } from './core/settings';
 import { inferRemoteWorkspacePath, normalizeRemotePath, sameLocalPath } from './core/paths';
+import { resolveTargetUri } from './core/targetUri';
 import { escapeHtml } from './core/text';
 import type { SearchMatch, SearchOptions, SearchSettings } from './core/types';
 import { buildIconUris, renderFallbackHtml, renderSearchViewHtml } from './webview/SearchViewHtml';
@@ -10,6 +11,7 @@ import { createServices, type Services } from './session/ServiceFactory';
 import { resolveMatchSelection } from './search/MatchNavigation';
 import type { SearchRepository, WorkspaceInfo } from './workspace/WorkspaceResolver';
 import { RipgrepDefinitionProvider } from './definition/RipgrepDefinitionProvider';
+import type { QuickFileEntry } from './search/QuickFileSearch';
 
 const SEARCH_VIEW_HTML_RELATIVE_PATH = 'media/search-view.html';
 const SEARCH_VIEW_CSS_RELATIVE_PATH = 'media/search-view.css';
@@ -72,6 +74,16 @@ const FILE_TYPE_ICON_RELATIVE_PATHS: Record<string, string> = {
   ps1: 'media/icons/filetypes/ps1.svg',
   default: 'media/icons/filetypes/default.svg'
 };
+
+/**
+ * 规范化 uri 字符串用于同文件比较：忽略斜杠数量、尾部斜杠与大小写差异。
+ */
+function normalizeUriForCompare(value: string): string {
+  return value
+    .replace(/^file:\/\/+\/?/u, 'file://')
+    .replace(/\/+$/u, '')
+    .toLowerCase();
+}
 
 class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'ripgrepTool.searchView';
@@ -183,6 +195,94 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
 
   public async focusSearch(): Promise<void> {
     this.focus();
+  }
+
+  /**
+   * 判断当前打开的工作区是否为“Linux 远端项目”：
+   * 已配置 SSH（remoteHost/username/password）且能从 UNC 或映射盘路径推断出远端路径。
+   * 只有满足时才把 Ctrl+P 覆盖为插件的快速文件搜索，其余工作区保持原生行为。
+   */
+  public async refreshWorkspaceContext(): Promise<void> {
+    const settings = this.getSettings();
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    const isLinuxRemote =
+      Boolean(workspaceFolder) &&
+      this.services.connectionController.isRemoteSearchConfigured(settings) &&
+      Boolean(settings.inferredRemoteSearchPath);
+    await vscode.commands.executeCommand('setContext', 'ripgrepTool.workspaceIsRemote', isLinuxRemote);
+    this.services.logger.debug(`workspace context linuxRemote=${isLinuxRemote ? 'true' : 'false'} path="${settings.inferredRemoteSearchPath || ''}"`);
+  }
+
+  /**
+   * 用 showQuickPick 实现的快速文件搜索，替代原生 Ctrl+P（Go to File）：
+   * 输入即通过远端 ripgrep 搜文件名，回车打开对应本地文件。
+   */
+  public async quickOpenFile(): Promise<void> {
+    const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+    if (!workspaceFolder) {
+      return;
+    }
+    const settings = this.getSettings();
+    if (!this.services.connectionController.isRemoteSearchConfigured(settings)) {
+      void vscode.window.showInformationMessage(await this.services.translationService.translate('connection_required'));
+      return;
+    }
+
+    const quickPick = vscode.window.createQuickPick<QuickFileEntry>();
+    quickPick.placeholder = '输入文件名，回车打开（远端 ripgrep）';
+    // 与原生 Ctrl+P 一致：点击其他位置或切换焦点即自动关闭，无需按 Esc。
+    quickPick.ignoreFocusOut = false;
+    quickPick.busy = false;
+    let debounceTimer: NodeJS.Timeout | undefined;
+
+    const openEntry = (entry: QuickFileEntry): void => {
+      quickPick.hide();
+      if (entry.uri) {
+        void vscode.window.showTextDocument(entry.uri, { preview: true });
+      }
+    };
+    quickPick.onDidAccept(() => {
+      const selected = quickPick.selectedItems[0];
+      if (selected) {
+        openEntry(selected);
+      }
+    });
+    quickPick.onDidChangeValue((value) => {
+      const query = value.trim();
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+      }
+      if (!query) {
+        quickPick.items = [];
+        return;
+      }
+      quickPick.busy = true;
+      debounceTimer = setTimeout(() => {
+        void this.runQuickFileSearch(query, settings, workspaceFolder, quickPick);
+      }, 300);
+    });
+    quickPick.show();
+  }
+
+  private async runQuickFileSearch(
+    query: string,
+    settings: SearchSettings,
+    workspaceFolder: vscode.WorkspaceFolder,
+    quickPick: vscode.QuickPick<QuickFileEntry>
+  ): Promise<void> {
+    try {
+      const result = await this.services.quickFileSearch.searchFiles(query, settings, workspaceFolder);
+      if (result.error && result.entries.length === 0) {
+        quickPick.items = [{ label: `搜索失败: ${result.error}`, description: '' }];
+      } else {
+        quickPick.items = result.entries;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      quickPick.items = [{ label: `搜索失败: ${message}`, description: '' }];
+    } finally {
+      quickPick.busy = false;
+    }
   }
 
   /**
@@ -552,6 +652,8 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
       payload: { ...normalized, inferredRemoteSearchPath: inferredForMessage || '' }
     } as any);
     this.services.messageRouter.postState({ type: 'state', running: false, summary: 'Settings saved' });
+    // SSH 配置变化可能改变“是否 Linux 远端项目”的判定，重算 Ctrl+P 接管条件。
+    void this.refreshWorkspaceContext();
     void this.autoConnectIfReady('settings saved');
   }
 
@@ -630,7 +732,7 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async openMatch(match: SearchMatch, newTab = false): Promise<void> {
-    const nextUri = match.uri ? vscode.Uri.parse(match.uri, true) : vscode.Uri.file(match.path);
+    const nextUri = resolveTargetUri(match.uri, match.path);
     const startedAt = Date.now();
     this.services.logger.log(`open start uri=${nextUri.toString()} path=${match.path} line=${match.line} column=${match.column}`);
     try {
@@ -685,7 +787,8 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     if (
       !activeEditor ||
       activeEditor.document.uri.scheme !== targetUri.scheme ||
-      !sameLocalPath(activeEditor.document.uri.fsPath, targetUri.fsPath)
+      (!sameLocalPath(activeEditor.document.uri.fsPath, targetUri.fsPath) &&
+        normalizeUriForCompare(activeEditor.document.uri.toString()) !== normalizeUriForCompare(targetUri.toString()))
     ) {
       return false;
     }
@@ -731,9 +834,16 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
+  // 该插件只在 Windows 侧使用：通过 ssh2 连到 Linux 服务器执行搜索。
+  // 非 Windows 环境不注册任何命令/提供器，避免误用。
+  if (process.platform !== 'win32') {
+    return;
+  }
   const provider = new RipgrepSearchViewProvider(context);
   // 激活即预热 SSH，右键跳转定义/定义提供器不再等待首次建连。
   void provider.warmUpConnection();
+  // 初始化工作区上下文，决定 Ctrl+P 是否被插件接管。
+  void provider.refreshWorkspaceContext();
   context.subscriptions.push(
     provider,
     vscode.languages.registerDefinitionProvider(
@@ -750,6 +860,7 @@ export function activate(context: vscode.ExtensionContext): void {
       await provider.focusSearch();
     }),
     vscode.commands.registerCommand('ripgrepTool.goToDefinition', () => void provider.goToDefinitionCommand()),
+    vscode.commands.registerCommand('ripgrepTool.quickOpenFile', () => void provider.quickOpenFile()),
     vscode.commands.registerCommand('ripgrepTool.openLogFile', async () => {
       try {
         await provider.openLogFileInEditor();
@@ -766,9 +877,10 @@ export function activate(context: vscode.ExtensionContext): void {
         void vscode.window.showErrorMessage(`Failed to reveal log file: ${message}`);
       }
     }),
-    // 切换工作区文件夹后旧的 Git 发现结果立即失效。
+    // 切换工作区文件夹后旧的 Git 发现结果立即失效，同时重算 Ctrl+P 覆盖条件。
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
       provider.invalidateWorkspaceInfoCache();
+      void provider.refreshWorkspaceContext();
     })
   );
 }

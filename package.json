@@ -2,7 +2,7 @@
   "name": "ripgreptool",
   "displayName": "Ripgrep Tool",
   "description": "Remote ripgrep search in the sidebar. Limits and setup are in the README (extension details), not in the in-editor UI.",
-  "version": "0.0.100",
+  "version": "0.0.108",
   "publisher": "local",
   "license": "UNLICENSED",
   "extensionKind": [
@@ -53,6 +53,11 @@
       {
         "command": "ripgrepTool.revealLogFile",
         "title": "Ripgrep Tool: Reveal Log File"
+      },
+      {
+        "command": "ripgrepTool.quickOpenFile",
+        "title": "Ripgrep: Quick Open File",
+        "category": "Ripgrep"
       }
     ],
     "configuration": {
@@ -106,7 +111,10 @@
           "items": {
             "type": "string"
           },
-          "default": [],
+          "default": [
+            "**/*mock*",
+            "**/*mock*/**"
+          ],
           "description": "Default exclude globs applied to definition search results, including the right-click Go to Definition command."
         },
         "ripgrepTool.incrementalTagIndex": {
@@ -115,7 +123,14 @@
           "description": "When enabled, background tag index refresh rebuilds only changed source files (git diff + local ctags merge, borrowing clangd's background-index idea) instead of the full repository, and falls back to a full rebuild whenever the incremental path is unsafe. Disabled by default; enable only after validating on your remote ctags/readtags environment."
         }
       }
-    }
+    },
+    "keybindings": [
+      {
+        "command": "ripgrepTool.quickOpenFile",
+        "key": "ctrl+p",
+        "when": "ripgrepTool.workspaceIsRemote && !inQuickOpen"
+      }
+    ]
   },
   "scripts": {
     "build": "tsc -p ./ --noEmit && node scripts/bundle-extension.mjs",
