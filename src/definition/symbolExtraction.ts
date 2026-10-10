@@ -8,8 +8,9 @@
  * 纯函数、不依赖 vscode API，便于单元测试。
  */
 
-const IDENT_START = /[A-Za-z_$]/u;
-const IDENT_PART = /[A-Za-z0-9_$]/u;
+// 用 Unicode 属性类，支持中文/希腊/西里尔等非 ASCII 标识符（如 Go 的 π、中文变量名）。
+const IDENT_START = /[\p{L}_$]/u;
+const IDENT_PART = /[\p{L}\p{N}_$]/u;
 const OPERATOR_SYMBOLS = [
   '<<=',
   '>>=',

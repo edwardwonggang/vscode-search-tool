@@ -1101,17 +1101,22 @@ mark {
     max-height: calc(100vh - 24px);
   }
 
-  .remoteSettingsGrid,
   .filtersGrid {
     grid-template-columns: 1fr;
   }
 
-  .fieldHost,
-  .fieldPort,
+  .fieldHost {
+    grid-column: span 9;
+  }
+
+  .fieldPort {
+    grid-column: span 3;
+  }
+
   .fieldUser,
   .fieldPassword,
   .fieldFull {
-    grid-column: 1;
+    grid-column: 1 / -1;
   }
 
   .modalFooter {
@@ -1125,4 +1130,36 @@ mark {
   .modalFooterActions {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
+
+/* 右键"打开所在文件夹"上下文菜单 */
+.resultContextMenu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 160px;
+  padding: 4px;
+  background: var(--vscode-menu-background, var(--modal-bg));
+  color: var(--vscode-menu-foreground, var(--fg));
+  border: 1px solid var(--vscode-menu-border, var(--modal-border));
+  border-radius: 4px;
+  box-shadow: var(--modal-shadow);
+  font-size: 12px;
+}
+.resultContextMenuItem {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 5px 10px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  border-radius: 3px;
+  cursor: pointer;
+  font: inherit;
+}
+.resultContextMenuItem:hover,
+.resultContextMenuItem:focus-visible {
+  background: var(--vscode-menu-selectionBackground, var(--hover));
+  color: var(--vscode-menu-selectionForeground, var(--fg));
+  outline: none;
 }

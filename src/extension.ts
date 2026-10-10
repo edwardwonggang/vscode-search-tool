@@ -165,6 +165,9 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
         case 'open':
           this.enqueueOpenMatch(message.payload as SearchMatch);
           break;
+        case 'revealFolder':
+          void this.revealMatchFolder(message.payload as { uri?: string; path?: string });
+          break;
         case 'trace':
           this.logWebviewTrace(message.payload);
           break;
@@ -686,8 +689,27 @@ class RipgrepSearchViewProvider implements vscode.WebviewViewProvider {
     return inferRemoteWorkspacePath(workspaceFolder.uri.fsPath, remoteUsername) ?? '';
   }
 
-  private enqueueOpenMatch(match: SearchMatch, newTab = false): void {
-    if (!match || (!match.uri && !match.path)) {
+  /** 在 Windows 原生资源管理器中显示匹配项所在文件夹（reveal in file explorer）。
+   *  搜索结果指向本地 file:// 工作区路径，故可直接用 revealFileInOS 在系统中定位并
+   *  选中该文件；对非本地（如 vscode-remote）URI 无法在 OS 中显示，给出提示。 */
+  private async revealMatchFolder(payload: { uri?: string; path?: string } | undefined): Promise<void> {
+    if (!payload || (!payload.uri && !payload.path)) {
+      this.services.logger.log('reveal folder ignored: missing uri/path');
+      return;
+    }
+    const fileUri = resolveTargetUri(payload.uri, payload.path || '');
+    if (fileUri.scheme !== 'file') {
+      this.services.logger.log(`reveal in OS skipped: non-local uri=${fileUri.toString()}`);
+      void vscode.window.showWarningMessage(
+        await this.services.translationService.format('reveal_folder_not_local', { path: fileUri.toString() })
+      );
+      return;
+    }
+    this.services.logger.log(`reveal in OS uri=${fileUri.toString()}`);
+    void vscode.commands.executeCommand('revealFileInOS', fileUri);
+  }
+
+  private enqueueOpenMatch(match: SearchMatch, newTab = false): void {    if (!match || (!match.uri && !match.path)) {
       this.services.logger.log('open ignored: missing match uri/path');
       return;
     }

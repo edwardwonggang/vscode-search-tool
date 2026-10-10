@@ -60,3 +60,5 @@ render_timing,rendered in {elapsedMs} ms,渲染 {elapsedMs} ms
 rebuild_tags_button,Rebuild tags,重建 tags
 rebuild_tags_start,Rebuilding tag index on server…,正在在服务器上重建标签索引…
 rebuild_tags_done,Tag index rebuilt.,已重建标签索引。
+open_containing_folder,Open Containing Folder,打开所在文件夹
+reveal_folder_not_local,Cannot reveal in file explorer for non-local resource: {path},无法在文件资源管理器中显示非本地资源：{path}

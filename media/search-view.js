@@ -861,6 +861,80 @@
     handleResultAction(event, 'pointerdown');
   }, true);
 
+  // ---- 右键"打开所在文件夹"上下文菜单 ----
+  let contextMenuEl = null;
+
+  function closeContextMenu() {
+    if (contextMenuEl) {
+      contextMenuEl.remove();
+      contextMenuEl = null;
+    }
+  }
+
+  function extractFolderPayload(event) {
+    if (!workspaceOk) return null;
+    const matchTarget = event.target.closest('[data-match]');
+    if (matchTarget) {
+      try {
+        const payload = JSON.parse(decodeURIComponent(matchTarget.dataset.match));
+        return { uri: payload.uri || '', path: payload.path || '' };
+      } catch {
+        return null;
+      }
+    }
+    const fileTarget = event.target.closest('[data-toggle-file]');
+    if (fileTarget) {
+      return { uri: '', path: decodeURIComponent(fileTarget.dataset.toggleFile) || '' };
+    }
+    return null;
+  }
+
+  function showResultContextMenu(event, folderPayload) {
+    closeContextMenu();
+    const menu = document.createElement('div');
+    menu.className = 'resultContextMenu';
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'resultContextMenuItem';
+    item.textContent = t('open_containing_folder');
+    item.addEventListener('click', () => {
+      closeContextMenu();
+      if (!folderPayload.uri && !folderPayload.path) return;
+      traceWebview('result-reveal-folder', { uri: folderPayload.uri, path: folderPayload.path });
+      vscode.postMessage({ type: 'revealFolder', payload: folderPayload });
+    });
+    menu.appendChild(item);
+    document.body.appendChild(menu);
+    const rect = menu.getBoundingClientRect();
+    const viewportW = window.innerWidth;
+    const viewportH = window.innerHeight;
+    let left = event.clientX;
+    let top = event.clientY;
+    if (left + rect.width > viewportW - 4) left = Math.max(4, viewportW - rect.width - 4);
+    if (top + rect.height > viewportH - 4) top = Math.max(4, viewportH - rect.height - 4);
+    menu.style.left = `${left}px`;
+    menu.style.top = `${top}px`;
+    contextMenuEl = menu;
+  }
+
+  resultsEl.addEventListener('contextmenu', (event) => {
+    const folderPayload = extractFolderPayload(event);
+    if (!folderPayload) return;
+    event.preventDefault();
+    event.stopPropagation();
+    showResultContextMenu(event, folderPayload);
+  });
+
+  window.addEventListener('pointerdown', (event) => {
+    if (contextMenuEl && !contextMenuEl.contains(event.target)) {
+      closeContextMenu();
+    }
+  }, true);
+  window.addEventListener('blur', closeContextMenu);
+  window.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') closeContextMenu();
+  });
+
   resultsEl.addEventListener('click', (event) => {
     handleResultAction(event, 'click');
   });

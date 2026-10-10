@@ -74,12 +74,24 @@ export function createFileQueryMatcher(query: string, caseSensitive: boolean): (
     return () => true;
   }
 
+  if (hasFileWildcard(normalizedQuery)) {
+    const baseNameRegex = new RegExp(`^${globToRegexSource(normalizedQuery, false)}$`, caseSensitive ? '' : 'i');
+    return (relativePath: string): boolean => {
+      const baseName = getBaseName(relativePath);
+      return baseNameRegex.test(baseName);
+    };
+  }
+
   const needle = caseSensitive ? normalizedQuery : normalizedQuery.toLowerCase();
   return (relativePath: string): boolean => {
     const baseName = getBaseName(relativePath);
     const haystack = caseSensitive ? baseName : baseName.toLowerCase();
     return haystack.includes(needle);
   };
+}
+
+export function hasFileWildcard(query: string): boolean {
+  return /[*?[]/.test(query);
 }
 
 export function normalizeFileNameQuery(query: string): string {
