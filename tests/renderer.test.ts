@@ -87,7 +87,8 @@ test('renderer replace builds sorted file-level model', () => {
 
   assert.equal(renderer.totalRowCount(), 9);
   assert.equal(renderer.totalHeight, 9 * 22);
-  assert.deepEqual(renderer.items.map((item) => item.relativePath), ['a.ts', 'b.ts', 'c.ts']);
+  // 相关性排序：match 多的文件 score 更高（c=3 > a=2 > b=1），同级才按字母序。
+  assert.deepEqual(renderer.items.map((item) => item.relativePath), ['c.ts', 'a.ts', 'b.ts']);
 });
 
 test('renderer merge appends matches to existing files without full rebuild', () => {
@@ -106,7 +107,8 @@ test('renderer merge with a new file rebuilds the model once', () => {
 
   assert.equal(renderer.totalRowCount(), 11);
   assert.equal(renderer.totalHeight, 11 * 22);
-  assert.deepEqual(renderer.items.map((item) => item.relativePath), ['a.ts', 'b.ts', 'c.ts', 'd.ts']);
+  // 相关性排序：c(3) > a(2) > b(1)=d(1)，同级按字母序。
+  assert.deepEqual(renderer.items.map((item) => item.relativePath), ['c.ts', 'a.ts', 'b.ts', 'd.ts']);
 });
 
 test('renderer collects visible rows with stable geometry and correct spacers', () => {
@@ -116,15 +118,15 @@ test('renderer collects visible rows with stable geometry and correct spacers', 
   const all = renderer.collectVisibleRows(0, 1000);
   assert.deepEqual(rowLabels(all.rows), [
     'a.ts', 'a.ts#1', 'a.ts#2', 'a.ts#10', 'a.ts#11',
-    'b.ts', 'b.ts#1',
     'c.ts', 'c.ts#3', 'c.ts#4', 'c.ts#5',
+    'b.ts', 'b.ts#1',
     'd.ts', 'd.ts#7'
   ]);
   assert.deepEqual([all.topSpacerHeight, all.renderedEnd], [0, 13 * 22]);
 
-  // 中间窗口：跳过 a.ts 匹配块末尾后应从 b.ts 文件头开始，spacer 从 110px 起。
+  // 中间窗口：跳过 a.ts 匹配块末尾（110px）后应从 c.ts 文件头开始，spacer 从 110px 起。
   const mid = renderer.collectVisibleRows(5 * 22, 5 * 22 + 20);
-  assert.deepEqual(rowLabels(mid.rows), ['b.ts']);
+  assert.deepEqual(rowLabels(mid.rows), ['c.ts']);
   assert.equal(mid.topSpacerHeight, 5 * 22);
 });
 

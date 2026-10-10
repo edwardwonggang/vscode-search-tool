@@ -2,7 +2,7 @@
   "name": "ripgreptool",
   "displayName": "Ripgrep Tool",
   "description": "Remote ripgrep search in the sidebar. Limits and setup are in the README (extension details), not in the in-editor UI.",
-  "version": "0.0.108",
+  "version": "0.0.115",
   "publisher": "local",
   "license": "UNLICENSED",
   "extensionKind": [
@@ -12,6 +12,9 @@
   "engines": {
     "vscode": "^1.90.0"
   },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "categories": [
     "Search",
     "Other"

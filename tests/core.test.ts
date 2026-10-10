@@ -314,6 +314,11 @@ test('file query matcher handles paths, basenames, and case sensitivity', () => 
   assert.equal(createFileQueryMatcher('app', false)('src/app/main.ts'), false);
   assert.equal(createFileQueryMatcher('src', false)('src/app/main.ts'), false);
   assert.equal(createFileQueryMatcher('', true)('anything.ts'), true);
+  assert.equal(createFileQueryMatcher('*.cpp', false)('src/a.cpp'), true);
+  assert.equal(createFileQueryMatcher('*.cpp', false)('src/a.h'), false);
+  assert.equal(createFileQueryMatcher('main?.c', false)('src/main1.c'), true);
+  assert.equal(createFileQueryMatcher('main?.c', false)('src/main12.c'), false);
+  assert.equal(createFileQueryMatcher('*.CPP', true)('src/a.cpp'), false);
 });
 
 test('remote path inference maps supported Windows workspace forms', () => {
@@ -370,7 +375,10 @@ test('definition locations dedupe by uri and keep 1-based line and column', () =
     uri: 'file:///C:/repo/src/a.c',
     legacyPath: 'C:\\repo\\src\\a.c',
     line: 10,
-    column: 5
+    column: 5,
+    endColumn: 8,
+    preview: 'int foo(void) {',
+    symbolName: 'foo'
   });
   assert.equal(locations[1].uri, 'file:///C:/repo/src/b.c');
   assert.equal(locations[1].line, 3);
@@ -662,10 +670,13 @@ test('remote command builders quote paths and args consistently', () => {
   );
   assert.equal(
     buildRemoteFileNameSearchCommand('/tmp/rg', '/repo', ['--files', '--hidden'], 'a[b]?*c', false),
-    "cd '/repo' && '/tmp/rg' '--files' '--hidden' '--iglob' '**/*a\\[b\\]\\?\\*c*'"
+    "cd '/repo' && '/tmp/rg' '--files' '--hidden' '--iglob' '**/a[b]?*c'"
   );
   assert.deepEqual(buildFileSearchGlobArgs('Main', false), ['--iglob', '**/*Main*']);
   assert.deepEqual(buildFileSearchGlobArgs('Main', true), ['-g', '**/*Main*']);
+  assert.deepEqual(buildFileSearchGlobArgs('*.cpp', false), ['--iglob', '**/*.cpp']);
+  assert.deepEqual(buildFileSearchGlobArgs('*.cpp', true), ['-g', '**/*.cpp']);
+  assert.deepEqual(buildFileSearchGlobArgs('src/*.c', false), ['--iglob', '**/src/*.c']);
 });
 
 test('ripgrep diagnostics ignore permission denied lines without hiding other failures', () => {
@@ -1213,10 +1224,12 @@ test('SearchSession ignores stale remote channel release from an old search', ()
 
   session.setActiveChannel(first);
   session.setActiveChannel(second);
+  // 释放一个旧搜索的通道只做 untrack，不关闭它（通道通常已自然结束）。
   session.setActiveChannel(undefined, first);
+  // 取消仅关闭当前仍活动的通道（second）。
   session.cancelActiveSearch();
 
-  assert.equal(firstClosed, 1);
+  assert.equal(firstClosed, 0);
   assert.equal(secondClosed, 1);
 });
 

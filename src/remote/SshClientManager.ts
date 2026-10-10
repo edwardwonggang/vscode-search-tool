@@ -3,6 +3,11 @@ import type { SearchSettings } from '../core/types';
 
 const SSH_KEEPALIVE_INTERVAL_MS = 15000;
 const SSH_KEEPALIVE_COUNT_MAX = 3;
+// 扩展自有墙钟超时：ssh2 的 readyTimeout(20s) 只保证握手阶段；若事件循环卡顿或
+// 协议边界使 readyTimeout 未触发，connect() 的 Promise 会永久 pending，in-flight
+// 分支会一直 await 它，导致 UI 卡在 "Connecting to SSH..."。此超时兜底销毁连接并
+// reject，让 getClient 清理后能重连。取 readyTimeout + 10s 裕量，避免误杀慢握手。
+const SSH_CONNECT_WALLCLOCK_TIMEOUT_MS = 30000;
 
 export type SshClientLogger = {
   log(message: string): void;
@@ -41,10 +46,14 @@ export class SshClientManager {
     const signature = getRemoteConnectionSignature(settings, this.options.workspaceId);
     if (this.activeClient && this.connectionSignature === signature) {
       // 复用现有连接：ssh2 已配置 keepalive，且 connect 阶段注册的 end/close
-      // 事件会在连接失效时清理 activeClient。复用前不再额外执行 echo 健康检查，
-      // 避免每次搜索多一次远端往返（慢链路上占跳转耗时的显著比例）。
-      this.logger.log(`ssh reuse existing connection host=${settings.remoteHost}:${settings.remotePort} user=${settings.remoteUsername} workspace=${this.options.workspaceId || '<default>'}`);
-      return this.activeClient;
+      // 事件会在连接失效时清理 activeClient。复用前做一次零成本的本地 socket
+      // 活性检查（远端 RST/FIN 已到达时本地 socket 会 destroyed/不可写），避免
+      // 复用已死的连接后在 exec 上挂起；不做远端往返，慢链路上无额外开销。
+      if (this.isClientAlive(this.activeClient)) {
+        this.logger.log(`ssh reuse existing connection host=${settings.remoteHost}:${settings.remotePort} user=${settings.remoteUsername} workspace=${this.options.workspaceId || '<default>'}`);
+        return this.activeClient;
+      }
+      this.close('reusing dead ssh connection, reconnecting');
     }
     if (this.connectionPromise && this.connectionSignature === signature) {
       this.logger.log(`ssh await in-flight connection host=${settings.remoteHost}:${settings.remotePort} user=${settings.remoteUsername} workspace=${this.options.workspaceId || '<default>'}`);
@@ -112,6 +121,14 @@ export class SshClientManager {
     this.connectionSignature = undefined;
   }
 
+  /** 复用前零成本活性检查：本地 socket 已销毁/不可写说明连接已被远端或网络关闭
+   *  （RST/FIN 已到达）。静默断连（服务器重启但 TCP 未拆）由 keepalive 兜底触发
+   *  error 并清理，这里仅捕捉本地可判定的死连接，避免复用死 socket 后在 exec 挂起。 */
+  private isClientAlive(client: Client): boolean {
+    const sock = (client as unknown as { _sock?: { destroyed?: boolean; writable?: boolean } })._sock;
+    return Boolean(sock && !sock.destroyed && sock.writable);
+  }
+
   private async connect(settings: SearchSettings): Promise<Client> {
     this.logger.debug(
       `ssh connect start host=${settings.remoteHost || '<empty>'}:${settings.remotePort} user=${settings.remoteUsername || '<empty>'}`
@@ -139,8 +156,21 @@ export class SshClientManager {
       const progress = setInterval(() => {
         this.logger.log(`ssh connect waiting (${Date.now() - startedAt} ms) host=${settings.remoteHost}:${settings.remotePort}`);
       }, 5000);
+      // 自有墙钟兜底：若 ssh2 因事件循环卡顿/协议边界未在 readyTimeout 内 settle，
+      // 销毁连接并 reject，保证 connectionPromise 不会永久 pending。
+      const wallClock = setTimeout(() => {
+        finish(() => {
+          try {
+            client.destroy();
+          } catch {
+            // ignore destroy failures
+          }
+          reject(new Error(`SSH connect timed out after ${SSH_CONNECT_WALLCLOCK_TIMEOUT_MS} ms.`));
+        });
+      }, SSH_CONNECT_WALLCLOCK_TIMEOUT_MS);
       const finish = (callback: () => void): void => {
         clearInterval(progress);
+        clearTimeout(wallClock);
         callback();
       };
       client.on('ready', () => {

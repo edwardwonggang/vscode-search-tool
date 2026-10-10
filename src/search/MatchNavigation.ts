@@ -7,6 +7,8 @@ export type MatchSelectionRange = {
 };
 
 const NEARBY_LINE_SEARCH_RADIUS = 200;
+// 定义跳转整词回退的半径：ctags 行号漂移通常在数行内，收紧半径避免跳到更远的引用/调用处。
+const DEFINITION_WORD_RADIUS = 40;
 
 export function resolveMatchSelection(
   lineCount: number,
@@ -53,11 +55,25 @@ function resolveLineIndex(
   }
 
   if (symbol) {
-    // 定义跳转优先找“整词出现”的附近行，避免 ctags 行号漂移后落在引用处或子串处。
-    const symbolLine = findNearbyLine(lineCount, requestedLine, (lineIndex) =>
-      isDefinition
-        ? containsWord(getLineText(lineIndex), symbol)
-        : getLineText(lineIndex).includes(symbol)
+    if (isDefinition) {
+      // 定义跳转优先找“像定义”的附近行（符号后随 ( { = : 等声明形态），
+      // 避免 ctags 行号漂移后落到更近的引用/调用处。
+      const defLine = findNearbyLine(lineCount, requestedLine, (lineIndex) =>
+        looksLikeDefinitionLine(getLineText(lineIndex), symbol)
+      );
+      if (defLine !== undefined) {
+        return defLine;
+      }
+    }
+    // 回退：非定义搜索（全文/内容）保持原半径找“包含符号”的行；定义跳转在无
+    // “定义形态”命中时缩小半径找整词出现，避免跳到远端引用。
+    const radius = isDefinition ? DEFINITION_WORD_RADIUS : NEARBY_LINE_SEARCH_RADIUS;
+    const symbolLine = findNearbyLine(
+      lineCount,
+      requestedLine,
+      (lineIndex) =>
+        isDefinition ? containsWord(getLineText(lineIndex), symbol) : getLineText(lineIndex).includes(symbol),
+      radius
     );
     if (symbolLine !== undefined) {
       return symbolLine;
@@ -70,12 +86,13 @@ function resolveLineIndex(
 function findNearbyLine(
   lineCount: number,
   requestedLine: number,
-  predicate: (lineIndex: number) => boolean
+  predicate: (lineIndex: number) => boolean,
+  radiusLimit = NEARBY_LINE_SEARCH_RADIUS
 ): number | undefined {
   if (predicate(requestedLine)) {
     return requestedLine;
   }
-  const radius = Math.min(NEARBY_LINE_SEARCH_RADIUS, lineCount - 1);
+  const radius = Math.min(radiusLimit, lineCount - 1);
   for (let offset = 1; offset <= radius; offset += 1) {
     const before = requestedLine - offset;
     if (before >= 0 && predicate(before)) {
@@ -89,8 +106,35 @@ function findNearbyLine(
   return undefined;
 }
 
-function lineMatches(lineText: string, previewText: string, symbol: string, isDefinition: boolean): boolean {
+/**
+ * 判断一行文本是否像“符号的定义/声明”而非引用。定义跳转行回退时优先命中此形态，
+ * 避免 ctags 行号漂移后落到更近的调用/成员访问等引用处。
+ */
+function looksLikeDefinitionLine(lineText: string, symbol: string): boolean {
+  const text = lineText.trim();
+  if (!text || !symbol) {
+    return false;
+  }
+  const idx = indexOfWord(text, symbol, 0);
+  if (idx < 0) {
+    return false;
+  }
+  // 成员访问（. / ->）、作用域（::）、调用后括号（)）多为引用形态，不作定义候选。
+  const before = text[idx - 1] ?? '';
+  if (before === '.' || before === '>' || before === ':' || before === ')') {
+    return false;
+  }
+  const tail = text.slice(idx + symbol.length).trimStart();
   return (
+    tail === '' ||
+    /^[({=;:]/.test(tail) ||
+    /^[A-Za-z_$][\w$]*\s*[({=:]/.test(tail) ||
+    idx === 0 ||
+    /^(?:#\s*define|class|struct|enum|interface|typedef|using|template|def|fn|func|function|static|extern|const|auto|var|let)\b/.test(text)
+  );
+}
+
+function lineMatches(lineText: string, previewText: string, symbol: string, isDefinition: boolean): boolean {  return (
     lineMatchesPreview(lineText, previewText) ||
     (!!symbol && (isDefinition ? containsWord(lineText, symbol) : lineText.includes(symbol)))
   );
@@ -181,7 +225,7 @@ function isWordBoundary(text: string, index: number): boolean {
   if (index < 0 || index >= text.length) {
     return true;
   }
-  return !/[A-Za-z0-9_]/u.test(text[index] ?? '');
+  return !/[\p{L}\p{N}_$]/u.test(text[index] ?? '');
 }
 
 function getPreviewSymbol(preview: string, column: number, endColumn: number): string {

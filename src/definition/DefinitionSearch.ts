@@ -250,11 +250,11 @@ export class DefinitionSearch {
   ): Promise<void> {
     let firstResultLogged = false;
     const createTarget = (remoteFileAbs: string) => {
-      const relativePath = this.getRelativeRemotePath(remoteFileAbs, repository.remoteCwd);
-      if (relativePath === undefined) {
-        throw new Error('Remote path is outside the workspace root.');
-      }
-      return this.workspaceResolver.createWorkspaceTarget(repository, relativePath);
+      // rg 兜底在远端 git 根下运行（`cd gitTop && rg ... .`），--json 输出的
+      // path.text 是相对 git 根的相对路径。直接按仓库相对路径映射到本地 git 根
+      // （与 ContentSearchRunner 一致）；不要再用 getRelativeRemotePath 当绝对路径
+      // 裁剪，否则相对路径恒为空，兜底永远无结果。
+      return this.workspaceResolver.createWorkspaceTarget(repository, remoteFileAbs);
     };
     const lineBuffer = new StreamingLineProcessor({
       shouldContinue: () => this.session.isCurrent(token),
@@ -308,7 +308,10 @@ export class DefinitionSearch {
     }
     let target;
     try {
-      target = this.createTargetFromRemotePath(repository, parsed.remoteFileAbs);
+      // tagsBaseRemote 即探针返回的远端 git 根：tag 里的文件路径相对该 git 根解析，
+      // 路径裁剪也必须以同一 git 根为基准，而不是推断的 remoteCwd——否则二者不一致
+      // 时整批结果会被静默丢弃（AGENTS.md 要求 remoteCwd 即远端 git 根）。
+      target = this.createTargetFromRemotePath(repository, parsed.remoteFileAbs, tagsBaseRemote);
     } catch {
       return null;
     }
@@ -325,8 +328,9 @@ export class DefinitionSearch {
     };
   }
 
-  private createTargetFromRemotePath(repository: ResolvedSearchRepository, remoteFileAbs: string) {
-    const relativePath = this.getRelativeRemotePath(remoteFileAbs, repository.remoteCwd);
+  private createTargetFromRemotePath(repository: ResolvedSearchRepository, remoteFileAbs: string, baseRemote: string) {
+    // baseRemote 为远端 git 根（tagsBaseRemote），与 remoteFileAbs 的解析基准一致。
+    const relativePath = this.getRelativeRemotePath(remoteFileAbs, baseRemote);
     if (relativePath !== undefined) {
       return this.workspaceResolver.createWorkspaceTarget(repository, relativePath);
     }

@@ -1,4 +1,5 @@
 import { shellEscape } from '../core/shell';
+import { hasFileWildcard, normalizeSearchPath } from '../core/glob';
 
 export function buildRemoteCommand(executablePath: string, remoteCwd: string, args: string[]): string {
   const escapedArgs = args.map((arg) => shellEscape(arg)).join(' ');
@@ -19,11 +20,14 @@ export function buildRemoteFileNameSearchCommand(
 }
 
 /**
- * 文件名搜索的 rg 内部 glob：basename 包含 query 的文件才会被 rg 遍历输出。
- * 大小写敏感用 -g，否则用 --iglob；query 中的 glob 元字符按字面量转义，
- * 保证与客户端子串匹配语义一致。
+ * 文件名搜索的 rg 内部 glob：无通配符时按 basename 子串剪枝（** 加 *query* 前缀后缀），
+ * 含通配符时把 query 当作 glob 模式（** 加 query），与客户端 basename 匹配语义一致。
  */
 export function buildFileSearchGlobArgs(fileQuery: string, caseSensitive: boolean): string[] {
+  if (hasFileWildcard(fileQuery)) {
+    const glob = `**/${normalizeSearchPath(fileQuery)}`;
+    return caseSensitive ? ['-g', glob] : ['--iglob', glob];
+  }
   const needle = escapeGlobLiteral(fileQuery);
   const glob = `**/*${needle}*`;
   return caseSensitive ? ['-g', glob] : ['--iglob', glob];

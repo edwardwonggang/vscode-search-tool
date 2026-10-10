@@ -91,7 +91,9 @@ export function isDefinitionLine(preview: string): boolean {
 }
 
 /**
- * 判断一行文本是否是“被查询符号的定义行”：既是定义行，又包含被查符号名。
+ * 判断一行文本是否“被查询符号的定义行”：既是定义行，又包含被查符号名。
+ * 除强定义关键字外，也识别非关键字定义形态（C++ `Foo::bar() {}`、`bar() {`、
+ * `T foo = ...` 等），使多候选时定义文件优先于仅引用的文件。
  * 被查符号取原始文本做子串匹配（区分大小写），避免把仅引用该符号的普通行误判。
  */
 export function isSymbolDefinitionLine(preview: string, query: string): boolean {
@@ -99,7 +101,35 @@ export function isSymbolDefinitionLine(preview: string, query: string): boolean 
   if (!symbol) {
     return false;
   }
-  return isDefinitionLine(preview) && String(preview).includes(symbol);
+  const text = String(preview);
+  if (!text.includes(symbol)) {
+    return false;
+  }
+  if (isDefinitionLine(text)) {
+    return true;
+  }
+  return looksLikeDefinitionShape(text, symbol);
+}
+
+/** 非关键字定义形态识别：符号后随 ( { = : 等声明特征，且非成员访问/调用引用。 */
+function looksLikeDefinitionShape(preview: string, symbol: string): boolean {
+  const text = preview.trim();
+  const idx = text.indexOf(symbol);
+  if (idx < 0) {
+    return false;
+  }
+  // 成员访问（. / ->）、作用域（::）、调用后括号（)）多为引用形态，不作定义。
+  const before = text[idx - 1] ?? '';
+  if (before === '.' || before === '>' || before === ':' || before === ')') {
+    return false;
+  }
+  const tail = text.slice(idx + symbol.length).trimStart();
+  return (
+    tail === '' ||
+    /^[({=;:]/.test(tail) ||
+    /^[A-Za-z_$][\w$]*\s*[({=:]/.test(tail) ||
+    idx === 0
+  );
 }
 
 /**

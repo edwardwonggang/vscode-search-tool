@@ -27,8 +27,6 @@ test('buildTagProbeCommand folds git/rg/ctags/tags checks into one command', () 
   assert.ok(cmd.includes('git rev-parse --is-inside-work-tree 2>/dev/null'));
   assert.ok(cmd.includes('git -C "$top" rev-parse HEAD 2>/dev/null'));
   assert.ok(cmd.includes('test -f "$top/tags"'));
-  assert.ok(cmd.includes('status --porcelain'));
-  assert.ok(cmd.includes('PROBE:dirty=%s'));
   assert.ok(cmd.includes("'/tmp/rg' --version 2>/dev/null"));
   assert.ok(cmd.includes("'/tmp/ctags' --version 2>/dev/null"));
   assert.ok(cmd.includes('PROBE:gitTop=%s'));
@@ -42,8 +40,7 @@ test('parseTagProbe parses all fields', () => {
     'PROBE:rgVersion=ripgrep 14.1.0',
     'PROBE:ctagsVersion=Universal Ctags 6.2.0',
     'PROBE:tags=y',
-    'PROBE:gitHead=abc123',
-    'PROBE:dirty=y'
+    'PROBE:gitHead=abc123'
   ].join('\n');
   const parsed = parseTagProbe(output);
   assert.equal(parsed?.gitTop, '/home/u/proj');
@@ -52,7 +49,6 @@ test('parseTagProbe parses all fields', () => {
   assert.equal(parsed?.ctagsVersion, 'Universal Ctags 6.2.0');
   assert.equal(parsed?.tagsExists, true);
   assert.equal(parsed?.gitHead, 'abc123');
-  assert.equal(parsed?.dirty, true);
 });
 
 test('parseTagProbe handles tags=n and missing git top', () => {

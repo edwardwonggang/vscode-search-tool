@@ -11,8 +11,6 @@ export type TagProbeResult = {
   ctagsVersion: string;
   tagsExists: boolean;
   gitHead: string;
-  /** 工作区是否有未提交改动（git 工作区脏）。 */
-  dirty: boolean;
   /** tags.meta.json 解析结果；tags 不存在或元数据缺失/损坏时为 undefined。 */
   meta?: TagIndexMeta;
 };
@@ -29,11 +27,10 @@ export function buildTagProbeCommand(remoteCwd: string, rgPath: string, ctagsPat
     `inside=$(git rev-parse --is-inside-work-tree 2>/dev/null) || inside=""`,
     `head=$(test -n "$top" && git -C "$top" rev-parse HEAD 2>/dev/null) || head=""`,
     `if test -n "$top" && test -f "$top/tags"; then tags=y; else tags=n; fi`,
-    `dirty=$(test -n "$top" && git -C "$top" status --porcelain 2>/dev/null | grep -q . && echo y || echo n) || dirty=n`,
     `if test "$tags" = y && test -f "$top/tags.meta.json"; then printf 'PROBE:meta=%s\\n' "$(cat "$top/tags.meta.json" 2>/dev/null)"; fi`,
     `rgv=$(${shellEscape(rgPath)} --version 2>/dev/null | head -n 1) || rgv=""`,
     `ctv=$(${shellEscape(ctagsPath)} --version 2>/dev/null | head -n 1) || ctv=""`,
-    `printf 'PROBE:gitTop=%s\\nPROBE:insideWorkTree=%s\\nPROBE:rgVersion=%s\\nPROBE:ctagsVersion=%s\\nPROBE:tags=%s\\nPROBE:gitHead=%s\\nPROBE:dirty=%s\\n' "$top" "$inside" "$rgv" "$ctv" "$tags" "$head" "$dirty"`
+    `printf 'PROBE:gitTop=%s\\nPROBE:insideWorkTree=%s\\nPROBE:rgVersion=%s\\nPROBE:ctagsVersion=%s\\nPROBE:tags=%s\\nPROBE:gitHead=%s\\n' "$top" "$inside" "$rgv" "$ctv" "$tags" "$head"`
   ];
   return lines.join('\n');
 }
@@ -66,7 +63,6 @@ export function parseTagProbe(output: string): TagProbeResult | undefined {
     ctagsVersion: values.ctagsVersion ?? '',
     tagsExists: (values.tags ?? 'n') === 'y',
     gitHead: values.gitHead ?? '',
-    dirty: (values.dirty ?? 'n') === 'y',
     meta: parseTagIndexMeta(values.meta ?? '')
   };
 }
